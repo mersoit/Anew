@@ -1,0 +1,21 @@
+[gd_scene load_steps=3 format=3 uid="uid://dinwwf5bgsrsc"]
+
+[ext_resource type="Script" uid="uid://b83ei4u0qvi5x" path="res://Scripts/Object.gd" id="1_oni83"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_oni83"]
+
+[node name="Object" type="Area2D"]
+z_index = 1
+script = ExtResource("1_oni83")
+
+[node name="Sprite" type="Sprite2D" parent="."]
+z_index = 1
+centered = false
+
+[node name="Label" type="Label" parent="."]
+visible = false
+offset_right = 40.0
+offset_bottom = 23.0
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_oni83")

@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3 uid="uid://clnyp16powcbs"]
+
+[ext_resource type="Script" uid="uid://cvxapf4jj4j7t" path="res://Scripts/NPC.gd" id="1_tdvfm"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_tdvfm"]
+
+[node name="Npc" type="Area2D"]
+z_index = 2
+script = ExtResource("1_tdvfm")
+
+[node name="Sprite" type="Sprite2D" parent="."]
+z_index = 2
+
+[node name="InteractionArea" type="Area2D" parent="."]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+scale = Vector2(8, 8)
+shape = SubResource("CircleShape2D_tdvfm")
+debug_color = Color(0.977406, 0.130415, 0.188531, 0.42)

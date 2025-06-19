@@ -1,0 +1,54 @@
+{
+  "background_prompt": "a medieval tavern interior, warmly lit, 2D pixel art, top-down view",
+  "highlight_prompt": "the player speaking to a mysterious cloaked figure by the fireplace",
+  "narrative": "You enter a smoky tavern on the edge of the empire. A cloaked figure beckons from the fireplace. The air crackles with tension.",
+  "player": {
+    "location": [7, 10],
+    "sprite_prompt": "a rugged medieval traveler with a green cloak, top-down pixel art"
+  },
+  "npcs": [
+    {
+      "id": "cloakman",
+      "label": "Cloaked Stranger",
+      "location": [7, 6],
+      "sprite_prompt": "a mysterious cloaked figure, medieval pixel art",
+      "dialogue_tree": {
+        "start": {
+          "text": "Traveler... destiny has brought you here.",
+          "options": [
+            {"text": "Who are you?", "next": "who"},
+            {"text": "What do you want from me?", "next": "want"}
+          ]
+        },
+        "who": {
+          "text": "I am but a shadow of the old kingdom."
+        },
+        "want": {
+          "text": "The fire reveals those worthy of the ancient gift.",
+          "options": [
+            {
+              "text": "I am ready.",
+              "next": "end",
+              "action": {
+                "transform": {"scale": [1.5, 1.5]},
+                "color": [1.0, 0.3, 0.3]
+              }
+            }
+          ]
+        },
+        "end": {
+          "text": "Then rise, bearer of flame."
+        }
+      }
+    }
+  ],
+  "objects": [
+    {
+      "id": "fire_pit",
+      "label": "Fire Pit",
+      "position": [7, 4],
+      "sprite_prompt": "a glowing fire pit, medieval tavern, top-down pixel art",
+      "interaction": "You feel warmth. Something ancient stirs within."
+    }
+  ]
+}

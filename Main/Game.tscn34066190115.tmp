@@ -1,0 +1,23 @@
+[gd_scene load_steps=5 format=3 uid="uid://2upqyxtu3q4v"]
+
+[ext_resource type="Script" uid="uid://cmcp1i3vxwjn7" path="res://Scripts/game.gd" id="1_1js7q"]
+[ext_resource type="PackedScene" uid="uid://c7du15ywx5qtj" path="res://Scenes/DialogueBox.tscn" id="1_mydax"]
+[ext_resource type="Script" uid="uid://qumcg5gbrh5w" path="res://Scripts/AIClient.gd" id="2_0wgfy"]
+[ext_resource type="Script" uid="uid://bjryu5anuvbip" path="res://Scripts/SceneTransition.gd" id="3_0wgfy"]
+
+[node name="Game" type="Node2D"]
+script = ExtResource("1_1js7q")
+
+[node name="DialogueManager" parent="." instance=ExtResource("1_mydax")]
+
+[node name="LoadingLabel" type="Label" parent="."]
+offset_right = 40.0
+offset_bottom = 23.0
+
+[node name="Background" type="Sprite2D" parent="."]
+
+[node name="AIClient" type="Node" parent="."]
+script = ExtResource("2_0wgfy")
+
+[node name="SceneTransition" type="Node" parent="."]
+script = ExtResource("3_0wgfy")

@@ -1,0 +1,18 @@
+[gd_scene load_steps=3 format=3 uid="uid://8l1cft1a68vn"]
+
+[ext_resource type="Script" uid="uid://dmmcmprej6545" path="res://Scripts/Player.gd" id="1_rpqav"]
+
+[sub_resource type="ConvexPolygonShape2D" id="ConvexPolygonShape2D_kyqiw"]
+
+[node name="Player" type="CharacterBody2D"]
+z_index = 3
+script = ExtResource("1_rpqav")
+
+[node name="InteractionArea" type="Area2D" parent="."]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="InteractionArea"]
+shape = SubResource("ConvexPolygonShape2D_kyqiw")
+debug_color = Color(0.255818, 0.548717, 0.850989, 0.42)
+
+[node name="Sprite" type="Sprite2D" parent="."]
+z_index = 3

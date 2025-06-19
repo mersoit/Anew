@@ -1,0 +1,37 @@
+[gd_scene load_steps=5 format=3 uid="uid://2upqyxtu3q4v"]
+
+[ext_resource type="Script" uid="uid://cmcp1i3vxwjn7" path="res://Scripts/game.gd" id="1_1js7q"]
+[ext_resource type="PackedScene" uid="uid://c7du15ywx5qtj" path="res://Scenes/DialogueBox.tscn" id="1_mydax"]
+[ext_resource type="Script" uid="uid://qumcg5gbrh5w" path="res://Scripts/AIClient.gd" id="2_0wgfy"]
+[ext_resource type="PackedScene" uid="uid://b3xjbtkrxu5dh" path="res://Scenes/SceneTransition.tscn" id="4_1js7q"]
+
+[node name="Game" type="Node2D"]
+script = ExtResource("1_1js7q")
+
+[node name="DialogueManager" parent="." instance=ExtResource("1_mydax")]
+
+[node name="UI" type="CenterContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_right = 600.0
+offset_bottom = 100.0
+
+[node name="LoadingLabel" type="Label" parent="UI"]
+custom_minimum_size = Vector2(600, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 3
+
+[node name="Background" type="Sprite2D" parent="."]
+z_index = 1
+
+[node name="AIClient" type="Node" parent="."]
+script = ExtResource("2_0wgfy")
+
+[node name="SceneTransition" parent="." instance=ExtResource("4_1js7q")]
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(284, 85)

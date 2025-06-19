@@ -1,0 +1,55 @@
+{
+    "background_prompt": "a windswept cliffside temple, ruins under moonlight, 2D pixel art, top-down view",
+    "highlight_prompt": "the player placing a burning artifact on a stone pedestal",
+    "narrative": "The winds howl across the cliff. You arrive at the forgotten Temple of Embers, where the fire you carry must find its place.",
+    "player": {
+      "location": [6, 10],
+      "sprite_prompt": "a cloaked figure carrying a glowing ember, top-down pixel art"
+    },
+    "npcs": [
+      {
+        "id": "temple_guardian",
+        "label": "Temple Guardian",
+        "location": [6, 6],
+        "sprite_prompt": "a stone guardian with glowing eyes, top-down medieval pixel art",
+        "dialogue_tree": {
+          "start": {
+            "text": "The flame you bear may awaken the temple... or doom it.",
+            "options": [
+              {
+                "text": "Place it on the pedestal.",
+                "next": "end",
+                "action": {
+                  "trigger": "next_scene"
+                }
+              },
+              {
+                "text": "I'm not ready.",
+                "next": "wait"
+              }
+            ]
+          },
+          "wait": {
+            "text": "Then return when you are."
+          },
+          "end": {
+            "text": "The temple accepts your offering. The ancient fire glows anew."
+          }
+        }
+      }
+    ],
+    "objects": [
+      {
+        "id": "pedestal",
+        "label": "Stone Pedestal",
+        "position": [6, 4],
+        "sprite_prompt": "an ancient stone pedestal with carved runes, top-down pixel art",
+        "interaction": "You feel the ember reacting. This is the place.",
+        "action": {
+          "color": [1.0, 0.4, 0.1],
+          "transform": {"scale": [1.2, 1.2]},
+          "trigger": "next_scene"
+        }
+      }
+    ]
+  }
