@@ -44,6 +44,7 @@ func _ready():
 
 	connect("mouse_entered", Callable(self, "_on_mouse_entered"))
 	connect("mouse_exited", Callable(self, "_on_mouse_exited"))
+	connect("input_event", Callable(self, "_on_input_event"))
 
 func _on_mouse_entered():
 	if is_instance_valid(label_node):
@@ -52,6 +53,10 @@ func _on_mouse_entered():
 func _on_mouse_exited():
 	if is_instance_valid(label_node):
 		label_node.visible = false
+
+func _on_input_event(viewport, event, shape_idx):
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		on_interact()
 
 func set_data(data: Dictionary):
 	await ready
@@ -114,7 +119,6 @@ func on_interact():
 		if dialogue_tree.size() > 0:
 			dm.start_dialogue(self, dialogue_tree)
 		elif interaction != "":
-			print("🗨️ Showing simple interaction as dialogue: %s" % interaction)
 			dm.start_dialogue(self, {
 				"root": {
 					"npc_line": interaction,

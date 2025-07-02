@@ -10,7 +10,6 @@ extends Node2D
 @onready var scene_transition: Node = $SceneTransition
 @onready var dialogue_manager: Node = $DialogueManager
 
-var history := _build_history_summary()
 var current_scene_index: int = 1
 var topic: String = "High Fantasy"
 var theme: String = "Combat"
@@ -19,21 +18,23 @@ var scene_json := {}
 var image_paths := {}
 var player_history: Array[String] = []
 var waiting_for_images := false
-var total_expected_images := 0
-var image_ids_requested := []
-var delayed_scene_json_received := false
 var scene_ready_queued := false
 var all_images_finalized := false
+var highlight_slides: Array = [] # To store ending slides summary/image data
+var game_ending: bool = false
 
 func _ready():
 	camera.make_current()
 	ai_client.connect("scene_json_ready", _on_scene_json_received)
 	ai_client.connect("image_ready", _on_image_ready)
 	ai_client.connect("all_images_ready", _on_all_images_ready)
+	ai_client.connect("ending_slides_ready", _on_ending_slides_ready)
 	scene_transition.connect("scene_ready", _on_scene_ready)
+	scene_transition.connect("end_game", _on_end_game)
 	dialogue_manager.connect("dialogue_finished_with_outcome", _on_dialogue_finished)
 	_setup_label()
 	$Camera2D.position = Vector2(0, 0)
+	_clear_scene()
 
 	background.centered = true
 	background.position = Vector2(0, 0)
@@ -65,6 +66,7 @@ func _on_scene_ready(scene_index: int):
 		print("⏳ Scene build delayed until images are finalized")
 		return
 	current_scene_index = scene_index
+	_clear_scene()
 	generate_scene(current_scene_index)
 
 func generate_scene(scene_id: int):
@@ -76,12 +78,10 @@ func generate_scene(scene_id: int):
 	waiting_for_images = true
 	all_images_finalized = false
 	scene_ready_queued = false
-	delayed_scene_json_received = false
 
 func _on_scene_json_received(scene_json: Dictionary) -> void:
 	print("📥 Game received scene JSON")
 	self.scene_json = scene_json
-	delayed_scene_json_received = true
 	if scene_json.has("narrative"):
 		loading_label.text = scene_json["narrative"]
 	else:
@@ -99,10 +99,7 @@ func _on_all_images_ready():
 	_build_scene()
 
 func _build_scene():
-	var default_player_texture = preload("res://assets/fallback/player_default.png")
-	var default_npc_texture = preload("res://assets/fallback/npc_default.png")
-	var default_obj_texture = preload("res://assets/fallback/object_default.png")
-
+	# Optionally use fallback textures (not strictly necessary if all images are generated)
 	if image_paths.has("scene_%d_background" % current_scene_index):
 		var bg_path: String = image_paths["scene_%d_background" % current_scene_index]
 		var img := Image.new()
@@ -127,8 +124,6 @@ func _build_scene():
 		p.position = _grid_to_pos(scene_json["player"].get("location", [7, 6]))
 		if image_paths.has("scene_%d_player" % current_scene_index):
 			p.set_sprite(image_paths["scene_%d_player" % current_scene_index])
-		else:
-			p.set_sprite("res://assets/fallback/player_default.png")
 		add_child(p)
 
 	for npc_data in scene_json.get("npcs", []):
@@ -144,8 +139,6 @@ func _build_scene():
 			var npc_id = "scene_%d_npc_%s" % [current_scene_index, npc_data.get("id", "")]
 			if image_paths.has(npc_id):
 				n.set_sprite(image_paths[npc_id])
-			else:
-				n.set_sprite("res://assets/fallback/npc_default.png")
 			add_child(n)
 
 	for obj_data in scene_json.get("objects", []):
@@ -161,8 +154,6 @@ func _build_scene():
 			var obj_id = "scene_%d_obj_%s" % [current_scene_index, obj_data.get("id", "")]
 			if image_paths.has(obj_id):
 				o.set_sprite(image_paths[obj_id])
-			else:
-				o.set_sprite("res://assets/fallback/object_default.png")
 			add_child(o)
 
 	loading_label.text = ""
@@ -179,19 +170,22 @@ func _on_dialogue_finished(outcome: String):
 func _build_history_summary() -> String:
 	var summary := ""
 	for entry in player_history:
-		summary += "- " + entry + "\n"
+		summary += entry + "\n"
 	return summary
 
 func _grid_to_pos(grid: Array) -> Vector2:
-	var tile_w = 32
-	var tile_h = 24
+	# This matches the grid system in your system prompt: 64x64 per grid unit, centered at 0,0
+	var tile_w = 64
+	var tile_h = 64
 	return Vector2(grid[0] * tile_w, grid[1] * tile_h)
 
 func set_topic_and_theme(t: String, th: String) -> void:
 	topic = t
 	theme = th
-	print("✅ Topic and Theme set to:", topic, "|", theme)
 	current_scene_index = 1
+	player_history.clear()
+	highlight_slides.clear()
+	game_ending = false
 	generate_scene(current_scene_index)
 
 func record_event(event: String) -> void:
@@ -204,3 +198,34 @@ func _on_interact(target_node):
 			dialogue_manager.start_dialogue(target_node, tree)
 		else:
 			print("🧱 No dialogue for this entity.")
+
+func _on_end_game():
+	game_ending = true
+	loading_label.text = "Gathering your story highlights..."
+	ai_client.get_ending_slides()
+
+func _on_ending_slides_ready(slides: Array):
+	highlight_slides = slides
+	_show_ending_slides()
+
+func _show_ending_slides():
+	_clear_scene()
+	loading_label.text = "Your Journey Highlights:"
+	if highlight_slides.is_empty():
+		loading_label.text = "No journey highlights available."
+		return
+	# For now, print in console and show the first slide summary in the loading_label
+	var i = 0
+	for slide in highlight_slides:
+		print("Ending Slide #%d" % (i + 1))
+		print("Summary: %s" % slide.get("summary", ""))
+		print("Image: %s" % slide.get("image", ""))
+		i += 1
+	# Show the first slide summary as a preview in label (expand with UI as needed)
+	loading_label.text = "1. " + highlight_slides[0].get("summary", "")
+	# TODO: Implement full UI navigation for slides
+
+func _clear_scene():
+	for child in get_children():
+		if (child is CharacterBody2D or child is Area2D) and child != self:
+			child.queue_free()

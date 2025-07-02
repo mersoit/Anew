@@ -2,14 +2,12 @@ extends CharacterBody2D
 
 @export var speed := 100.0
 @onready var sprite: Sprite2D = $Sprite
-@onready var interaction_area: Area2D = $InteractionArea
+@onready var collision_shape: CollisionShape2D = $CollisionShape2D
+
 var target_position := Vector2.ZERO
 var click_timer := Timer.new()
 var last_clicked_target: Node = null
 var interaction_target: Node = null
-
-var input_direction := Vector2.ZERO
-var last_direction := Vector2.DOWN
 var interactables := []
 var id: String = "player"
 
@@ -18,14 +16,20 @@ func _ready():
 	click_timer.wait_time = 0.3
 	click_timer.one_shot = true
 
-	interaction_area.body_entered.connect(_on_body_entered)
-	interaction_area.body_exited.connect(_on_body_exited)
+	# Optional: setup proximity via Area2D if needed, else remove
+	if is_instance_valid(collision_shape):
+		if collision_shape.get_parent() is Area2D and collision_shape.get_parent() != self:
+			var area = collision_shape.get_parent()
+			area.body_entered.connect(_on_body_entered)
+			area.body_exited.connect(_on_body_exited)
 
 	var client = get_node_or_null("/root/AIClient")
 	if client:
 		client.connect("image_ready", Callable(self, "_on_image_ready"))
 	else:
 		print("⚠️ AIClient singleton not found in Player._ready()")
+
+	target_position = position
 
 func _physics_process(delta):
 	if interaction_target and position.distance_to(interaction_target.global_position) < 36:
@@ -51,7 +55,7 @@ func _unhandled_input(event):
 		point_query.collide_with_areas = true
 		point_query.collide_with_bodies = true
 
-		var result = space_state.intersect_point(point_query, 1)
+		var result = space_state.intersect_point(point_query, 32)
 		interaction_target = null
 
 		for res in result:

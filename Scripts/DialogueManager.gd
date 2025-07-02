@@ -2,6 +2,7 @@ extends CanvasLayer
 
 signal dialogue_finished_with_outcome(outcome: String)
 signal dialogue_finished
+signal trigger_end # NEW: Signal for ending the game and showing highlight slides
 
 @onready var panel: Panel = $Panel
 @onready var label: Label = $Panel/Label
@@ -43,13 +44,21 @@ func _show_node():
 func _on_option_selected(option: Dictionary):
 	current_node = option.get("next", "")
 
-	if option.has("action") and current_npc and current_npc.has_method("do_action"):
-		current_npc.do_action(option["action"])
+	# Handle special trigger (e.g. ending the game)
+	if option.has("action") and option["action"].has("trigger"):
+		var trig = option["action"]["trigger"]
+		if trig == "trigger_end":
+			emit_signal("trigger_end")
+			_end_dialogue()
+			return
+		elif trig == "next_scene" and current_npc and current_npc.has_method("do_action"):
+			current_npc.do_action(option["action"])
+	else:
+		if option.has("action") and current_npc and current_npc.has_method("do_action"):
+			current_npc.do_action(option["action"])
 
 	if option.has("outcome"):
 		emit_signal("dialogue_finished_with_outcome", option["outcome"])	
-		var event: String = "- " + option["outcome"]
-		emit_signal("dialogue_finished_with_outcome", event)
 
 	_show_node()
 

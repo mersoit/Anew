@@ -2,14 +2,12 @@ extends Area2D
 
 @export var speed := 100.0
 @onready var sprite: Sprite2D = $Sprite
-@onready var interaction_area: Area2D = $InteractionArea
+@onready var collision_shape: CollisionShape2D = $CollisionShape2D
+
 var target_position := Vector2.ZERO
 var click_timer := Timer.new()
 var last_clicked_target: Node = null
 var interaction_target: Node = null
-
-var input_direction := Vector2.ZERO
-var last_direction := Vector2.DOWN
 var interactables := []
 var id: String = ""
 var dialogue_tree := {}
@@ -20,17 +18,17 @@ func _ready():
 	click_timer.wait_time = 0.3
 	click_timer.one_shot = true
 
-	add_to_group("interactables")	
-	interaction_area.set_pickable(true)
+	add_to_group("interactables")
 
-	interaction_area.body_entered.connect(_on_body_entered)
-	interaction_area.body_exited.connect(_on_body_exited)
+	# If you want proximity, set up signals here using the main collision shape or another Area2D if needed
 
 	var client = get_node_or_null("/root/AIClient")
 	if client:
 		client.connect("image_ready", Callable(self, "_on_image_ready"))
 	else:
 		print("⚠️ AIClient singleton not found in NPC._ready()")
+
+	connect("input_event", Callable(self, "_on_input_event"))
 
 func _process(delta):
 	if interaction_target and global_position.distance_to(interaction_target.global_position) < 36:
@@ -48,7 +46,7 @@ func _unhandled_input(event):
 		point_query.collide_with_areas = true
 		point_query.collide_with_bodies = true
 
-		var result = space_state.intersect_point(point_query, 1)
+		var result = space_state.intersect_point(point_query, 32)
 		interaction_target = null
 
 		for res in result:
@@ -64,6 +62,10 @@ func _unhandled_input(event):
 					last_clicked_target = obj
 					click_timer.start()
 				break
+
+func _on_input_event(viewport, event, shape_idx):
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		on_interact()
 
 func _interact_with_target():
 	if interaction_target and interaction_target.has_method("on_interact"):
@@ -120,7 +122,7 @@ func on_interact():
 	if get_dialogue_tree().size() > 0:
 		print("🧩 Dialogue available for", name)
 		var root = get_tree().get_root()
-		var game_node = root.get_node("Game") # Update this if your node is named differently
+		var game_node = root.get_node("Game")
 		if game_node:
 			game_node._on_interact(self)
 	else:

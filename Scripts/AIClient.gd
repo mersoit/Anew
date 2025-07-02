@@ -3,7 +3,7 @@ extends Node
 signal scene_json_ready(scene_data: Dictionary)
 signal image_ready(id: String, path: String)
 signal all_images_ready()
-signal background_ready(path: String)
+signal ending_slides_ready(slide_data: Array) # NEW: for highlight slides
 
 var current_scene_id: String = ""
 const SCENE_REQUEST_URL := "https://mersbot.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview"
@@ -12,7 +12,7 @@ const GPT_REPHRASE_URL := "https://mersbot.openai.azure.com/openai/deployments/g
 
 const HEADERS: PackedStringArray = [
 	"Content-Type: application/json",
-	"api-key: "
+	""
 ]
 
 var total_images_requested: int = 0
@@ -20,6 +20,11 @@ var images_finished: int = 0
 var current_scene_index: int = -1
 var retry_counts: Dictionary = {}
 var rate_limit_retries: Dictionary = {}
+
+# For ending slide collection
+var highlight_summaries: Array[String] = []
+var highlight_images: Array[String] = []
+var all_scene_jsons: Array[Dictionary] = [] # store scenes in order
 
 func request_scene_json(topic: String, theme: String, history: String = ""):
 	_reset_state_for_new_scene()
@@ -50,48 +55,6 @@ func request_scene_json(topic: String, theme: String, history: String = ""):
 
 	http_request.request_completed.connect(_on_scene_response.bind(http_request))
 	http_request.request(SCENE_REQUEST_URL, HEADERS, HTTPClient.METHOD_POST, JSON.stringify(body))
-	
-func _request_all_images(scene_json: Dictionary) -> void:
-	var all_prompts := []
-	var seen_ids := {}
-
-	var add_prompt = func(base_id: String, prompt: String):
-		if not seen_ids.has(base_id):
-			var unique_id: String = "scene_%d_%s" % [current_scene_index, base_id]
-			all_prompts.append({"id": unique_id, "prompt": prompt})
-			seen_ids[base_id] = true
-
-	if scene_json.has("background_prompt"):
-		add_prompt.call("background", scene_json["background_prompt"])
-
-	if scene_json.has("player") and scene_json["player"].has("sprite_prompt"):
-		add_prompt.call("player", scene_json["player"]["sprite_prompt"])
-
-	for npc in scene_json.get("npcs", []):
-		add_prompt.call("npc_" + str(npc.get("id", "")), npc["sprite_prompt"])
-
-	for obj in scene_json.get("objects", []):
-		add_prompt.call("obj_" + str(obj.get("id", "")), obj.get("sprite_prompt", ""))
-
-	total_images_requested = all_prompts.size()
-	if total_images_requested == 0:
-		emit_signal("all_images_ready")
-		return
-
-	# Request highlight separately so it doesn't block scene building
-	if scene_json.has("highlight_prompt"):
-		_request_image("highlight", scene_json["highlight_prompt"])
-
-	for item in all_prompts:
-		_request_image(item["id"], item["prompt"])
-
-func _reset_state_for_new_scene():
-	current_scene_index += 1
-	total_images_requested = 0
-	images_finished = 0
-	retry_counts.clear()
-	rate_limit_retries.clear()
-	print("--- Requesting New Scene (Index: %d) ---" % current_scene_index)
 
 func _on_scene_response(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, http_request: HTTPRequest):
 	http_request.queue_free()
@@ -108,8 +71,6 @@ func _on_scene_response(result: int, code: int, _headers: PackedStringArray, bod
 		return
 
 	var content_text: String = json_result["choices"][0]["message"]["content"]
-	print("🧠 Scene JSON Content:\n", content_text)
-
 	var scene_json: Dictionary = JSON.parse_string(content_text)
 
 	if not scene_json is Dictionary:
@@ -117,8 +78,10 @@ func _on_scene_response(result: int, code: int, _headers: PackedStringArray, bod
 		return
 
 	_process_scene_json(scene_json)
+	# Track scenes for ending slide recaps
+	all_scene_jsons.append(scene_json)
 	emit_signal("scene_json_ready", scene_json)
-	call_deferred("_request_all_images", scene_json)
+	call_deferred("request_all_images", scene_json, current_scene_index)
 
 func _process_scene_json(scene_json: Dictionary):
 	var clean_prompt: Callable = func(p: String) -> String: return p.strip_edges().replace("\n", " ")
@@ -166,47 +129,27 @@ func request_all_images(scene_json: Dictionary, scene_index: int) -> void:
 		add_prompt.call("obj_" + str(obj.get("id", "")), obj.get("sprite_prompt", ""))
 
 	total_images_requested = all_prompts.size()
+	images_finished = 0
 	if total_images_requested == 0:
 		emit_signal("all_images_ready")
 		return
 
+	# Request highlight image for ending slides
 	if scene_json.has("highlight_prompt"):
-		_request_image("highlight", scene_json["highlight_prompt"])
+		_request_image("scene_%d_highlight" % scene_index, scene_json["highlight_prompt"])
 
 	for item in all_prompts:
 		_request_image(item["id"], item["prompt"])
 
-func _rephrase_prompt(original_prompt: String, id: String):
-	var http := HTTPRequest.new()
-	add_child(http)
-
-	var rephrase_body := {
-		"messages": [
-			{"role": "system", "content": "Rephrase this prompt to comply with image generation safety filters, while keeping its visual meaning and detail."},
-			{"role": "user", "content": original_prompt}
-		],
-		"max_tokens": 200
-	}
-
-	http.request_completed.connect(func(result, code, headers, body):
-		if code == 200:
-			var json: Dictionary = JSON.parse_string(body.get_string_from_utf8())
-			if json.has("choices"):
-				var new_prompt: String = json["choices"][0]["message"]["content"]
-				print("🔄 Rephrased prompt for", id, "→", new_prompt)
-				_request_image(id, new_prompt, true)
-			else:
-				print("❌ GPT rephrase failed for", id)
-		else:
-			print("❌ GPT rephrase HTTP error for", id, "Code:", code)
-	)
-
-	http.request(GPT_REPHRASE_URL, HEADERS, HTTPClient.METHOD_POST, JSON.stringify(rephrase_body))
+func _reset_state_for_new_scene():
+	current_scene_index += 1
+	total_images_requested = 0
+	images_finished = 0
+	retry_counts.clear()
+	rate_limit_retries.clear()
+	# Do not clear highlight_summaries/all_scene_jsons here, only on full game reset
 
 func _request_image(id: String, prompt: String, is_retry := false):
-	if not is_retry:
-		print("🧾 Requesting image '%s' with prompt: '%s'" % [id, prompt])
-
 	var http_request := HTTPRequest.new()
 	add_child(http_request)
 
@@ -221,8 +164,6 @@ func _request_image(id: String, prompt: String, is_retry := false):
 			http_request.queue_free()
 			if code != 200:
 				print("❌ Image generation failed for %s." % id)
-				if not is_retry:
-					_rephrase_prompt(prompt, id)
 				return
 
 			var response_text: String = body.get_string_from_utf8()
@@ -233,7 +174,6 @@ func _request_image(id: String, prompt: String, is_retry := false):
 			else:
 				print("❌ No image URL found in response for:", id)
 	)
-
 	http_request.request(IMAGE_REQUEST_URL, HEADERS, HTTPClient.METHOD_POST, JSON.stringify(body))
 
 func _download_image(id: String, url: String):
@@ -247,15 +187,51 @@ func _download_image(id: String, url: String):
 				file.store_buffer(body)
 				file.close()
 				emit_signal("image_ready", id, path)
-				if id.ends_with("player"):
-					print("🎯 Background-ready for player image: ", path)
-				elif id.ends_with("background"):
-					emit_signal("background_ready", path)
 				images_finished += 1
 				if images_finished >= total_images_requested:
 					emit_signal("all_images_ready")
 			else:
 				print("❌ Failed to download image for:", id)
 	)
-
 	http_request.request(url)
+
+# --- Ending Slides Logic ---
+
+func get_ending_slides():
+	# Call this when the game ends (trigger_end)
+	highlight_summaries.clear()
+	highlight_images.clear()
+	var slides: Array = []
+
+	for i in range(all_scene_jsons.size()):
+		var scene = all_scene_jsons[i]
+		var summary := ""
+		var image_path := ""
+		# Grab highlight_summary (or fallback to narrative)
+		if scene.has("highlight_summary"):
+			summary = scene["highlight_summary"]
+		elif scene.has("narrative"):
+			summary = scene["narrative"]
+		else:
+			summary = "No summary available."
+		highlight_summaries.append(summary)
+
+		# Image path must match what was used in request_all_images
+		var h_id = "scene_%d_highlight" % (i+1)
+		var user_path = "user://%s.png" % h_id
+		if FileAccess.file_exists(user_path):
+			image_path = user_path
+		else:
+			image_path = ""
+		highlight_images.append(image_path)
+
+		slides.append({"summary": summary, "image": image_path})
+
+	emit_signal("ending_slides_ready", slides)
+
+func reset_session():
+	# Call this on game restart
+	highlight_summaries.clear()
+	highlight_images.clear()
+	all_scene_jsons.clear()
+	current_scene_index = -1

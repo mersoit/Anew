@@ -11,8 +11,6 @@ script = ExtResource("1_tdvfm")
 [node name="Sprite" type="Sprite2D" parent="."]
 z_index = 2
 
-[node name="InteractionArea" type="Area2D" parent="."]
-
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 scale = Vector2(8, 8)
 shape = SubResource("CircleShape2D_tdvfm")
