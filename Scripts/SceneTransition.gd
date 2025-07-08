@@ -141,8 +141,7 @@ func request_all_images(scene_json: Dictionary, scene_index: int) -> void:
 	for item in all_prompts:
 		_request_image(item["id"], item["prompt"])
 
-func _reset_state_for_new_scene():
-	current_scene_index += 1
+func _reset_state_for_new_scene():	
 	total_images_requested = 0
 	images_finished = 0
 	retry_counts.clear()

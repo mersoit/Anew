@@ -3,7 +3,7 @@ extends Node
 signal scene_json_ready(scene_data: Dictionary)
 signal image_ready(id: String, path: String)
 signal all_images_ready()
-signal ending_slides_ready(slide_data: Array) # NEW: for highlight slides
+signal ending_slides_ready(slide_data: Array) # For highlight slides
 
 var current_scene_id: String = ""
 const SCENE_REQUEST_URL := "https://mersbot.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview"
@@ -25,6 +25,9 @@ var rate_limit_retries: Dictionary = {}
 var highlight_summaries: Array[String] = []
 var highlight_images: Array[String] = []
 var all_scene_jsons: Array[Dictionary] = [] # store scenes in order
+
+# --- NEW: Store expected image IDs for ready check ---
+var expected_image_ids: Array = []
 
 func request_scene_json(topic: String, theme: String, history: String = ""):
 	_reset_state_for_new_scene()
@@ -73,12 +76,43 @@ func _on_scene_response(result: int, code: int, _headers: PackedStringArray, bod
 	var content_text: String = json_result["choices"][0]["message"]["content"]
 	var scene_json: Dictionary = JSON.parse_string(content_text)
 
+	# Print scene JSON and locations for debugging
+	print("===== SCENE JSON RECEIVED =====")
+	print(content_text)
+
+	if scene_json.has("npcs"):
+		print("===== NPC LOCATIONS =====")
+		for npc in scene_json["npcs"]:
+			var npc_id = npc.get("id", "unknown")
+			var npc_name = npc.get("name", "unknown")
+			var loc = npc.get("location", null)
+			var locs = npc.get("locations", null)
+			if locs:
+				print("NPC:", npc_name, "(id:", npc_id, ") locations:", locs)
+			elif loc:
+				print("NPC:", npc_name, "(id:", npc_id, ") location:", loc)
+			else:
+				print("NPC:", npc_name, "(id:", npc_id, ") has no location")
+
+	if scene_json.has("objects"):
+		print("===== OBJECT LOCATIONS =====")
+		for obj in scene_json["objects"]:
+			var obj_id = obj.get("id", "unknown")
+			var obj_name = obj.get("name", "unknown")
+			var loc = obj.get("location", null)
+			var locs = obj.get("locations", null)
+			if locs:
+				print("Object:", obj_name, "(id:", obj_id, ") locations:", locs)
+			elif loc:
+				print("Object:", obj_name, "(id:", obj_id, ") location:", loc)
+			else:
+				print("Object:", obj_name, "(id:", obj_id, ") has no location")
+
 	if not scene_json is Dictionary:
 		print("❌ Scene content JSON parsing failed. Raw content was:\n", content_text)
 		return
 
 	_process_scene_json(scene_json)
-	# Track scenes for ending slide recaps
 	all_scene_jsons.append(scene_json)
 	emit_signal("scene_json_ready", scene_json)
 	call_deferred("request_all_images", scene_json, current_scene_index)
@@ -105,6 +139,51 @@ func _process_scene_json(scene_json: Dictionary):
 			expanded_objects.append(obj)
 	scene_json["objects"] = expanded_objects
 
+# --- Returns all image IDs expected for the scene and index ---
+func get_expected_image_ids(scene_json: Dictionary, scene_index: int) -> Array:
+	var ids := []
+	var seen_ids := {}
+
+	# Add background
+	if scene_json.has("background_prompt"):
+		var base_id = "background"
+		if not seen_ids.has(base_id):
+			var unique_id = "scene_%d_%s" % [scene_index, base_id]
+			ids.append(unique_id)
+			seen_ids[base_id] = true
+
+	# Add player
+	if scene_json.has("player") and scene_json["player"].has("sprite_prompt"):
+		var base_id = "player"
+		if not seen_ids.has(base_id):
+			var unique_id = "scene_%d_%s" % [scene_index, base_id]
+			ids.append(unique_id)
+			seen_ids[base_id] = true
+
+	# Add NPCs
+	for npc in scene_json.get("npcs", []):
+		var base_id = "npc_" + str(npc.get("id", ""))
+		if not seen_ids.has(base_id):
+			var unique_id = "scene_%d_%s" % [scene_index, base_id]
+			ids.append(unique_id)
+			seen_ids[base_id] = true
+
+	# Add objects
+	for obj in scene_json.get("objects", []):
+		var base_id = "obj_" + str(obj.get("id", ""))
+		if not seen_ids.has(base_id):
+			var unique_id = "scene_%d_%s" % [scene_index, base_id]
+			ids.append(unique_id)
+			seen_ids[base_id] = true
+
+	# highlight image (optional)
+	if scene_json.has("highlight_prompt"):
+		var base_id = "highlight"
+		var unique_id = "scene_%d_%s" % [scene_index, base_id]
+		ids.append(unique_id)
+
+	return ids
+
 func request_all_images(scene_json: Dictionary, scene_index: int) -> void:
 	current_scene_index = scene_index
 	var all_prompts := []
@@ -128,6 +207,13 @@ func request_all_images(scene_json: Dictionary, scene_index: int) -> void:
 	for obj in scene_json.get("objects", []):
 		add_prompt.call("obj_" + str(obj.get("id", "")), obj.get("sprite_prompt", ""))
 
+	# Store expected IDs for ready check
+	expected_image_ids = []
+	for d in all_prompts:
+		expected_image_ids.append(d["id"])
+	if scene_json.has("highlight_prompt"):
+		expected_image_ids.append("scene_%d_highlight" % scene_index)
+
 	total_images_requested = all_prompts.size()
 	images_finished = 0
 	if total_images_requested == 0:
@@ -142,7 +228,7 @@ func request_all_images(scene_json: Dictionary, scene_index: int) -> void:
 		_request_image(item["id"], item["prompt"])
 
 func _reset_state_for_new_scene():
-	current_scene_index += 1
+	# No increment to current_scene_index here! (scene index is managed by game.gd)
 	total_images_requested = 0
 	images_finished = 0
 	retry_counts.clear()
@@ -188,8 +274,7 @@ func _download_image(id: String, url: String):
 				file.close()
 				emit_signal("image_ready", id, path)
 				images_finished += 1
-				if images_finished >= total_images_requested:
-					emit_signal("all_images_ready")
+				# Do not emit all_images_ready here – handled by game.gd based on expected_image_ids!
 			else:
 				print("❌ Failed to download image for:", id)
 	)

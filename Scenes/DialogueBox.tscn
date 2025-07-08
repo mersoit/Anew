@@ -30,3 +30,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 0
+
+[node name="PortraitSprite" type="Sprite2D" parent="."]
+position = Vector2(896, 550)
+scale = Vector2(0.4, 0.4)

@@ -48,7 +48,7 @@ If it is history it needs to be based on something that happened in history. If 
 
 ---
 
-🖼 Required JSON Schema example with placeholders which can be extended on as much as needed for purpose of good level design.
+🖼 Required JSON Schema example with placeholders and advanced dialogue switching logic.
 {
   "scene_index": 1,
   "narrative": "Evocative paragraph about current setting, mood, and emotional stakes.",
@@ -73,23 +73,15 @@ If it is history it needs to be based on something that happened in history. If 
               "player_line": "Answers, always.",
               "next": "wisdom",
               "action": {
-                "trigger": "next_scene",
-                "scale": 1.1,
-                "move": [-3, 11],
-                "color": [200, 255, 180],
-                "delete": false
+                "switch_dialogue": {
+                  "target_id": "object_firepit",
+                  "new_root": "fire_revealed"
+                }
               }
             },
             {
               "player_line": "Comfort sounds nice.",
-              "next": "comfort",
-              "action": {
-                "trigger": null,
-                "scale": 1.0,
-                "move": [0, 0],
-                "color": [255, 255, 255],
-                "delete": false
-              }
+              "next": "comfort"
             }
           ]
         },
@@ -98,6 +90,21 @@ If it is history it needs to be based on something that happened in history. If 
         },
         "comfort": {
           "npc_line": "Then stay by the fire. Even silence can be kind."
+        },
+        "after_fire": {
+          "npc_line": "You have seen what lies beyond. Are you ready to move on?",
+          "responses": [
+            {
+              "player_line": "Yes, I am ready.",
+              "next": "next_scene_confirm",
+              "action": {
+                "trigger": "next_scene"
+              }
+            }
+          ]
+        },
+        "next_scene_confirm": {
+          "npc_line": "Then let us proceed."
         }
       }
     }
@@ -106,7 +113,7 @@ If it is history it needs to be based on something that happened in history. If 
     {
       "id": "object_firepit",
       "name": "Fire Pit",
-      "location": [[10, 9], [-11, 9], [10, 6], [11, -6]],
+      "location": [[10, 9], [-11, 9]],
       "sprite_prompt": "Prompt for 1 single object fitting of the theme, colored detailed table-top figurine, whole white background.",
       "label": "fire_pit_group",
       "dialogue_tree": {
@@ -117,29 +124,24 @@ If it is history it needs to be based on something that happened in history. If 
               "player_line": "Peer into the flames.",
               "next": "reveal",
               "action": {
-                "trigger": null,
-                "scale": 1.2,
-                "move": [0, 0],
-                "color": [255, 180, 100],
-                "delete": false
+                "switch_dialogue": {
+                  "target_id": "npc_hermit",
+                  "new_root": "after_fire"
+                }
               }
             }
           ]
         },
         "reveal": {
           "npc_line": "A face dances in the embers—your own, distorted by fear or memory."
+        },
+        "fire_revealed": {
+          "npc_line": "The fire now burns clearer, as if a secret has been released."
         }
-      },
-      "action": {
-        "scale": 0.9,
-        "move": [0, 0],
-        "color": [255, 255, 255],
-        "delete": false
       }
     }
   ]
 }
-
 
 ---
 
@@ -152,16 +154,16 @@ All responses, actions, and choices occur within the dialogue tree structure:
 - Each player response can optionally carry an "action" with:
 
 {
-  "trigger": "next_scene",
-  "scale": 1.2,
-  "move": [10, 10],
-  "color": [255, 255, 255],
-  "delete": false
+  "trigger": "next_scene",      // Only present in at least one path, and only once logical switches have occurred
+  "switch_dialogue": {
+    "target_id": "npc_hermit",
+    "new_root": "after_fire"
+  }
 }
 
-- "next_scene" will end the current scene/level and move to the next. There needs to be at least on npc or option that can lead to "next_scene"
+- "next_scene" will end the current scene/level and move to the next. There needs to be at least one npc or option that can lead to "next_scene" but ONLY after the logical switching or progression.
+- "switch_dialogue" allows a dialogue selection to forcibly set the dialogue tree root of a specified NPC or object to a given node. Use this for all conditional or unlockable progression.
 - One object can have multiple locations, that means they will be replicated to populate the scene.
-These actions are interpreted in the engine and visually applied to NPCs, player, or objects.
 
 ---
 
@@ -170,4 +172,5 @@ These actions are interpreted in the engine and visually applied to NPCs, player
 - Emphasize emotional depth, symbolism, and psychoanalytic hooks.
 - Do not state the moral outright. Let the player’s journey reveal the theme.
 - Include ambiguity, temptation, or symbolism in character motives or scenes.
+- Dialogue content should naturally suggest an end or resolution to the level when conditions are met, so the scene never ends abruptly or illogically.
 - Use highlight_prompt to reflect what the player did, not just what the scene looked like.

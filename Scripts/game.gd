@@ -20,8 +20,11 @@ var player_history: Array[String] = []
 var waiting_for_images := false
 var scene_ready_queued := false
 var all_images_finalized := false
-var highlight_slides: Array = [] # To store ending slides summary/image data
+var highlight_slides: Array = []
 var game_ending: bool = false
+var next_scene_delay_timer: Timer = null
+var progression_flags := {}
+var expected_image_ids: Array = []
 
 func _ready():
 	camera.make_current()
@@ -32,6 +35,7 @@ func _ready():
 	scene_transition.connect("scene_ready", _on_scene_ready)
 	scene_transition.connect("end_game", _on_end_game)
 	dialogue_manager.connect("dialogue_finished_with_outcome", _on_dialogue_finished)
+	dialogue_manager.connect("trigger_next_scene", _on_trigger_next_scene)
 	_setup_label()
 	$Camera2D.position = Vector2(0, 0)
 	_clear_scene()
@@ -45,6 +49,10 @@ func _ready():
 	if screen_size.x > bg_size.x or screen_size.y > bg_size.y:
 		var scale_factor = max(screen_size.x / bg_size.x, screen_size.y / bg_size.y)
 		camera.zoom = Vector2(1 / scale_factor, 1 / scale_factor)
+	next_scene_delay_timer = Timer.new()
+	next_scene_delay_timer.one_shot = true
+	add_child(next_scene_delay_timer)
+	next_scene_delay_timer.timeout.connect(_on_next_scene_delay_timeout)
 	print("✅ Game Ready")
 
 func _setup_label():
@@ -82,6 +90,10 @@ func generate_scene(scene_id: int):
 func _on_scene_json_received(scene_json: Dictionary) -> void:
 	print("📥 Game received scene JSON")
 	self.scene_json = scene_json
+	progression_flags = {}
+	if scene_json.has("progression_conditions"):
+		for cond in scene_json["progression_conditions"]:
+			progression_flags[cond] = false
 	if scene_json.has("narrative"):
 		loading_label.text = scene_json["narrative"]
 	else:
@@ -89,17 +101,29 @@ func _on_scene_json_received(scene_json: Dictionary) -> void:
 	await get_tree().process_frame
 	print("🎯 Requesting image generation tasks...")
 	ai_client.request_all_images(scene_json, current_scene_index)
+	expected_image_ids = ai_client.get_expected_image_ids(scene_json, current_scene_index)
 
 func _on_image_ready(id: String, path: String):
 	image_paths[id] = path
 	print("📸 Image ready:", id, "→", path)
+	if not all_images_finalized and expected_image_ids.size() > 0:
+		var all_ready = true
+		for expected_id in expected_image_ids:
+			if not image_paths.has(expected_id):
+				all_ready = false
+				break
+		if all_ready:
+			_on_all_images_ready()
 
 func _on_all_images_ready():
+	if all_images_finalized:
+		print("⚠️ Scene already finalized, skipping redundant build.")
+		return
 	print("✅ All images finalized. Building scene now...")
 	_build_scene()
 
 func _build_scene():
-	# Optionally use fallback textures (not strictly necessary if all images are generated)
+	all_images_finalized = true
 	if image_paths.has("scene_%d_background" % current_scene_index):
 		var bg_path: String = image_paths["scene_%d_background" % current_scene_index]
 		var img := Image.new()
@@ -157,15 +181,25 @@ func _build_scene():
 			add_child(o)
 
 	loading_label.text = ""
-	all_images_finalized = true
 	if scene_ready_queued:
-		scene_transition.next_scene()
+		next_scene() # Instead of scene_transition.next_scene()
+
+func next_scene():
+	current_scene_index += 1
+	_clear_scene()
+	generate_scene(current_scene_index)
 
 func _on_dialogue_finished(outcome: String):
 	if outcome != "":
 		player_history.append("- " + outcome)
 	previous_outcome = _build_history_summary()
-	scene_transition.next_scene()
+	next_scene()
+
+func _on_next_scene_delay_timeout():
+	next_scene()
+
+func _on_trigger_next_scene():
+	next_scene_delay_timer.start(5.0)
 
 func _build_history_summary() -> String:
 	var summary := ""
@@ -174,7 +208,6 @@ func _build_history_summary() -> String:
 	return summary
 
 func _grid_to_pos(grid: Array) -> Vector2:
-	# This matches the grid system in your system prompt: 64x64 per grid unit, centered at 0,0
 	var tile_w = 64
 	var tile_h = 64
 	return Vector2(grid[0] * tile_w, grid[1] * tile_h)
@@ -214,18 +247,33 @@ func _show_ending_slides():
 	if highlight_slides.is_empty():
 		loading_label.text = "No journey highlights available."
 		return
-	# For now, print in console and show the first slide summary in the loading_label
 	var i = 0
 	for slide in highlight_slides:
 		print("Ending Slide #%d" % (i + 1))
 		print("Summary: %s" % slide.get("summary", ""))
 		print("Image: %s" % slide.get("image", ""))
 		i += 1
-	# Show the first slide summary as a preview in label (expand with UI as needed)
 	loading_label.text = "1. " + highlight_slides[0].get("summary", "")
-	# TODO: Implement full UI navigation for slides
+
+func switch_dialogue_node(target_id: String, new_root: String):
+	for child in get_children():
+		var cid = child.get("id") if child.has_method("get") else null
+		var tree = child.get("dialogue_tree") if child.has_method("get") else null
+		if cid != null and cid == target_id:
+			if tree != null and typeof(tree) == TYPE_DICTIONARY and tree.has(new_root):
+				tree["root"] = new_root
+				print("🔀 Dialogue for %s now starts at %s" % [target_id, new_root])
+			else:
+				print("⚠️ No such root node: %s in %s" % [new_root, target_id])
+			return
+	print("⚠️ Could not find target for dialogue switch: %s" % target_id)
 
 func _clear_scene():
 	for child in get_children():
 		if (child is CharacterBody2D or child is Area2D) and child != self:
 			child.queue_free()
+
+func set_progression_flag(flag: String):
+	if progression_flags.has(flag):
+		progression_flags[flag] = true
+		print("✅ Progression flag set:", flag)
