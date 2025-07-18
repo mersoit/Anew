@@ -27,6 +27,10 @@ var highlight_images: Array[String] = []
 var all_scene_jsons: Array[Dictionary] = [] # store scenes in order
 
 func request_scene_json(topic: String, theme: String, history: String = ""):
+	if current_scene_index < 1:
+		print("⚠️ SceneTransition: Skipping first scene generation")
+		return
+	
 	_reset_state_for_new_scene()
 
 	var user_prompt := "Generate scene for topic '%s' and theme '%s'. " % [topic, theme]
@@ -106,6 +110,7 @@ func _process_scene_json(scene_json: Dictionary):
 	scene_json["objects"] = expanded_objects
 
 func request_all_images(scene_json: Dictionary, scene_index: int) -> void:
+	print("🎯 SceneTransition.request_all_images called with scene_index: ", scene_index)
 	current_scene_index = scene_index
 	var all_prompts := []
 	var seen_ids := {}

@@ -1,6 +1,7 @@
 extends CharacterBody2D
 
 @export var speed := 100.0
+@export var interaction_distance := 36.0  # Make this configurable
 @onready var sprite: Sprite2D = $Sprite
 @onready var collision_shape: CollisionShape2D = $CollisionShape2D
 
@@ -10,12 +11,15 @@ var last_clicked_target: Node = null
 var interaction_target: Node = null
 var interactables := []
 var id: String = "player"
-var game = get_node_or_null("/root/Game")
+var game = null  # Will be set in _ready
 
 func _ready():
+	add_to_group("player")
 	add_child(click_timer)
 	click_timer.wait_time = 0.3
 	click_timer.one_shot = true
+	
+	game = get_node_or_null("/root/Game")
 
 	# Optional: setup proximity via Area2D if needed, else remove
 	if is_instance_valid(collision_shape):
@@ -24,25 +28,27 @@ func _ready():
 			area.body_entered.connect(_on_body_entered)
 			area.body_exited.connect(_on_body_exited)
 
-	var client = get_node_or_null("/root/AIClient")
+	var client = get_node_or_null("/root/Game/AIClient")  # Use full path
 	if client:
 		client.connect("image_ready", Callable(self, "_on_image_ready"))
 	else:
-		print("⚠️ AIClient singleton not found in Player._ready()")
-
-	target_position = position
+		print("⚠️ AIClient not found in Player._ready()")
 
 func _physics_process(delta):
-	if interaction_target and position.distance_to(interaction_target.global_position) < 36:
+	# Check if we should interact
+	if interaction_target and position.distance_to(interaction_target.global_position) < interaction_distance:
 		velocity = Vector2.ZERO
 		_interact_with_target()		
 		return
+		
+	# Check if we should close dialogue due to distance
 	var game = get_node_or_null("/root/Game")
 	if game:
 		var dm = game.get_node_or_null("DialogueManager")
 		if dm and dm.visible and dm.current_target:
-			dm.try_close_on_player_distance(self, dm.current_target, 64.0) # Adjust distance as needed
+			dm.try_close_on_player_distance(self, dm.current_target, 64.0)
 
+	# Move towards target
 	if position.distance_to(target_position) > 4:
 		var direction = (target_position - position).normalized()
 		velocity = direction * speed
@@ -68,12 +74,23 @@ func _unhandled_input(event):
 			var obj = res.collider
 			if obj and obj.is_in_group("interactables") and obj.has_method("on_interact"):
 				interaction_target = obj
-				if last_clicked_target == obj and click_timer.time_left > 0:
-					print("🖱️ Double clicked:", obj.name)
-					obj.on_interact()
-					interaction_target = null
-					click_timer.stop()
+				
+				# Check if we're already close enough
+				if global_position.distance_to(obj.global_position) < interaction_distance:
+					# We're close enough, interact immediately
+					if last_clicked_target == obj and click_timer.time_left > 0:
+						print("🖱️ Double clicked:", obj.name)
+						obj.on_interact()
+						interaction_target = null
+						click_timer.stop()
+					else:
+						# Single click while close - interact immediately
+						obj.on_interact()
+						interaction_target = null
+					last_clicked_target = obj
+					click_timer.start()
 				else:
+					# We're too far, set as target to walk towards
 					last_clicked_target = obj
 					click_timer.start()
 				break
@@ -101,7 +118,6 @@ func set_sprite(path: String):
 	if file:
 		var err := img.load_png_from_buffer(file.get_buffer(file.get_length()))
 		if err == OK:
-			make_edge_white_transparent(img, 0.97)
 			var tex := ImageTexture.create_from_image(img)
 			if is_instance_valid(sprite):
 				sprite.texture = tex
@@ -115,15 +131,14 @@ func set_sprite(path: String):
 	else:
 		print("❌ Failed to load image file at:", path)
 
-func _is_white(c: Color, threshold := 0.97) -> bool:
-	return c.r >= threshold and c.g >= threshold and c.b >= threshold
-
-func make_edge_white_transparent(img: Image, threshold := 0.97):
+func make_edge_white_transparent(img: Image, threshold := 0.95):
 	img.convert(Image.FORMAT_RGBA8)
 	var w = img.get_width()
 	var h = img.get_height()
 	var visited := {}
 	var queue := []
+
+	# --- 1. Flood-fill edge background ---
 	for x in range(w):
 		for y in [0, h-1]:
 			if _is_white(img.get_pixel(x, y), threshold):
@@ -136,6 +151,7 @@ func make_edge_white_transparent(img: Image, threshold := 0.97):
 				var v = Vector2i(x, y)
 				queue.append(v)
 				visited[v] = true
+	
 	var dirs = [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]
 	while not queue.is_empty():
 		var v: Vector2i = queue.pop_front()
@@ -143,10 +159,42 @@ func make_edge_white_transparent(img: Image, threshold := 0.97):
 		for d in dirs:
 			var n = v + d
 			if n.x >= 0 and n.x < w and n.y >= 0 and n.y < h:
-				if not visited.has(n):
-					if _is_white(img.get_pixel(n.x, n.y), threshold):
-						queue.append(n)
-						visited[n] = true
+				if not visited.has(n) and _is_white(img.get_pixel(n.x, n.y), threshold):
+					queue.append(n)
+					visited[n] = true
+
+	# --- 2. Aggressive cleanup: remove ALL remaining (isolated) white pixels ---
+	for y in range(h):
+		for x in range(w):
+			var pixel = img.get_pixel(x, y)
+			if _is_white(pixel, threshold) and pixel.a > 0.5:
+				img.set_pixel(x, y, Color(0,0,0,0))
+
+	# --- 3. Smart pass: Remove small background islands inside sprite using local neighborhood ---
+	# (removes "holes" of off-white inside sprite body)
+	var to_clear := []
+	for y in range(1, h-1):
+		for x in range(1, w-1):
+			var c = img.get_pixel(x, y)
+			if _is_white(c, threshold) and c.a > 0.5:
+				var neighbor_alpha_sum = 0.0
+				var neighbor_count = 0
+				for dy in [-1,0,1]:
+					for dx in [-1,0,1]:
+						if dx == 0 and dy == 0:
+							continue
+						var n = img.get_pixel(x+dx, y+dy)
+						neighbor_alpha_sum += n.a
+						neighbor_count += 1
+				if neighbor_alpha_sum < neighbor_count * 0.5:
+					# Most neighbors are already transparent, so this is likely background
+					to_clear.append(Vector2i(x, y))
+	for v in to_clear:
+		img.set_pixel(v.x, v.y, Color(0,0,0,0))
+
+func _is_white(c: Color, threshold := 0.95) -> bool:
+	var brightness = (c.r + c.g + c.b) / 3.0
+	return brightness >= threshold and c.a > 0.5
 						
 
 func _on_image_ready(received_id: String, path: String) -> void:

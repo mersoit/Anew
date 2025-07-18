@@ -3,6 +3,7 @@ extends Area2D
 @export var speed := 100.0
 @onready var sprite: Sprite2D = $Sprite
 @onready var collision_shape: CollisionShape2D = $CollisionShape2D
+@export var interaction_distance := 36.0
 
 var target_position := Vector2.ZERO
 var click_timer := Timer.new()
@@ -11,7 +12,6 @@ var interaction_target: Node = null
 var interactables := []
 var id: String = ""
 var dialogue_tree := {}
-var scene_transition: Node = null
 
 func _ready():
 	add_child(click_timer)
@@ -22,11 +22,11 @@ func _ready():
 
 	# If you want proximity, set up signals here using the main collision shape or another Area2D if needed
 
-	var client = get_node_or_null("/root/AIClient")
+	var client = get_node_or_null("/root/Game/AIClient")  # Use full path
 	if client:
 		client.connect("image_ready", Callable(self, "_on_image_ready"))
 	else:
-		print("⚠️ AIClient singleton not found in NPC._ready()")
+		print("⚠️ AIClient not found in Player._ready()")
 
 	connect("input_event", Callable(self, "_on_input_event"))
 
@@ -90,7 +90,6 @@ func set_sprite(path: String):
 	if file:
 		var err := img.load_png_from_buffer(file.get_buffer(file.get_length()))
 		if err == OK:
-			make_edge_white_transparent(img, 0.97)
 			var tex := ImageTexture.create_from_image(img)
 			if is_instance_valid(sprite):
 				sprite.texture = tex
@@ -104,15 +103,14 @@ func set_sprite(path: String):
 	else:
 		print("❌ Failed to load image file at:", path)
 
-func _is_white(c: Color, threshold := 0.97) -> bool:
-	return c.r >= threshold and c.g >= threshold and c.b >= threshold
-
-func make_edge_white_transparent(img: Image, threshold := 0.97):
-	img.convert(Image.FORMAT_RGBA8)	
+func make_edge_white_transparent(img: Image, threshold := 0.95):
+	img.convert(Image.FORMAT_RGBA8)
 	var w = img.get_width()
 	var h = img.get_height()
 	var visited := {}
 	var queue := []
+
+	# --- 1. Flood-fill edge background ---
 	for x in range(w):
 		for y in [0, h-1]:
 			if _is_white(img.get_pixel(x, y), threshold):
@@ -125,6 +123,7 @@ func make_edge_white_transparent(img: Image, threshold := 0.97):
 				var v = Vector2i(x, y)
 				queue.append(v)
 				visited[v] = true
+	
 	var dirs = [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]
 	while not queue.is_empty():
 		var v: Vector2i = queue.pop_front()
@@ -132,11 +131,44 @@ func make_edge_white_transparent(img: Image, threshold := 0.97):
 		for d in dirs:
 			var n = v + d
 			if n.x >= 0 and n.x < w and n.y >= 0 and n.y < h:
-				if not visited.has(n):
-					if _is_white(img.get_pixel(n.x, n.y), threshold):
-						queue.append(n)
-						visited[n] = true
+				if not visited.has(n) and _is_white(img.get_pixel(n.x, n.y), threshold):
+					queue.append(n)
+					visited[n] = true
 
+	# --- 2. Aggressive cleanup: remove ALL remaining (isolated) white pixels ---
+	for y in range(h):
+		for x in range(w):
+			var pixel = img.get_pixel(x, y)
+			if _is_white(pixel, threshold) and pixel.a > 0.5:
+				img.set_pixel(x, y, Color(0,0,0,0))
+
+	# --- 3. Smart pass: Remove small background islands inside sprite using local neighborhood ---
+	# (removes "holes" of off-white inside sprite body)
+	var to_clear := []
+	for y in range(1, h-1):
+		for x in range(1, w-1):
+			var c = img.get_pixel(x, y)
+			if _is_white(c, threshold) and c.a > 0.5:
+				var neighbor_alpha_sum = 0.0
+				var neighbor_count = 0
+				for dy in [-1,0,1]:
+					for dx in [-1,0,1]:
+						if dx == 0 and dy == 0:
+							continue
+						var n = img.get_pixel(x+dx, y+dy)
+						neighbor_alpha_sum += n.a
+						neighbor_count += 1
+				if neighbor_alpha_sum < neighbor_count * 0.5:
+					# Most neighbors are already transparent, so this is likely background
+					to_clear.append(Vector2i(x, y))
+	for v in to_clear:
+		img.set_pixel(v.x, v.y, Color(0,0,0,0))
+
+func _is_white(c: Color, threshold := 0.95) -> bool:
+	var brightness = (c.r + c.g + c.b) / 3.0
+	return brightness >= threshold and c.a > 0.5
+	
+	
 func _on_image_ready(received_id: String, path: String) -> void:
 	if received_id == id:
 		print("🎯 NPC loading texture from:", path)
@@ -144,7 +176,7 @@ func _on_image_ready(received_id: String, path: String) -> void:
 
 func set_data(data: Dictionary):
 	if data.has("id"):
-		id = "npc_" + str(data["id"])
+		id = str(data["id"])  # Remove the "npc_" prefix here
 	if data.has("dialogue_tree"):
 		dialogue_tree = data["dialogue_tree"]
 
@@ -153,6 +185,13 @@ func get_dialogue_tree():
 
 func on_interact():
 	print("🗣️ NPC interacted:", name)
+	
+	# Check distance to player before showing dialogue
+	var player = get_tree().get_first_node_in_group("player")
+	if player and global_position.distance_to(player.global_position) > interaction_distance:
+		print("📏 Too far from player, ignoring interaction")
+		return
+	
 	if get_dialogue_tree().size() > 0:
 		print("🧩 Dialogue available for", name)
 		var root = get_tree().get_root()

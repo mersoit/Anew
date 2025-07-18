@@ -7,13 +7,27 @@ signal ending_slides_ready(slide_data: Array) # For highlight slides
 
 var current_scene_id: String = ""
 const SCENE_REQUEST_URL := "https://mersbot.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview"
-const IMAGE_REQUEST_URL := "https://mersbot.openai.azure.com/openai/deployments/dall-e-3/images/generations?api-version=2024-04-01-preview"
+const IMAGE_REQUEST_URL_GPT1 := "https://admin-md45xf05-westus3.cognitiveservices.azure.com/openai/deployments/gpt-image-1/images/generations?api-version=2025-04-01-preview"
 const GPT_REPHRASE_URL := "https://mersbot.openai.azure.com/openai/deployments/gpt-35-turbo/chat/completions?api-version=2025-01-01-preview"
+const IMAGE_REQUEST_URL := "https://mersbot.openai.azure.com/openai/deployments/dall-e-3/images/generations?api-version=2024-04-01-preview"
 
-const HEADERS: PackedStringArray = [
-	"Content-Type: application/json",
-	""
-]
+var OPENAI_API_KEY = ""
+var AZURE_IMAGE_API_KEY := ""
+
+# Header helpers for different endpoints
+func get_text_headers() -> PackedStringArray:
+	return PackedStringArray([
+		"Content-Type: application/json",
+		"api-key: %s" % OPENAI_API_KEY
+	])
+
+func get_image_headers() -> PackedStringArray:
+	return PackedStringArray([
+		"Content-Type: application/json",
+		"Authorization: Bearer %s" % AZURE_IMAGE_API_KEY
+	])
+
+const CONTENT_TYPE_HEADER := "Content-Type: application/json"
 
 var total_images_requested: int = 0
 var images_finished: int = 0
@@ -29,10 +43,10 @@ var all_scene_jsons: Array[Dictionary] = [] # store scenes in order
 # --- NEW: Store expected image IDs for ready check ---
 var expected_image_ids: Array = []
 
-func request_scene_json(topic: String, theme: String, history: String = ""):
+func request_scene_json(topic: String, theme: String, history: String = "", scene_index: int = 1):
 	_reset_state_for_new_scene()
-
-	var user_prompt := "Generate scene for topic '%s' and theme '%s'. " % [topic, theme]
+	var user_prompt := "Generate scene %d for topic '%s' and theme '%s'. " % [scene_index, topic, theme]
+	user_prompt += "Set the scene_index property to %d in the JSON. " % scene_index
 	if not history.is_empty():
 		user_prompt += "Here is the full player history so far:\n%s" % history
 
@@ -53,11 +67,11 @@ func request_scene_json(topic: String, theme: String, history: String = ""):
 			{"role": "system", "content": system_prompt},
 			{"role": "user", "content": user_prompt}
 		],
-		"max_tokens": 4096
+		"max_tokens": 8192
 	}
 
 	http_request.request_completed.connect(_on_scene_response.bind(http_request))
-	http_request.request(SCENE_REQUEST_URL, HEADERS, HTTPClient.METHOD_POST, JSON.stringify(body))
+	http_request.request(SCENE_REQUEST_URL, get_text_headers(), HTTPClient.METHOD_POST, JSON.stringify(body))
 
 func _on_scene_response(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, http_request: HTTPRequest):
 	http_request.queue_free()
@@ -115,7 +129,6 @@ func _on_scene_response(result: int, code: int, _headers: PackedStringArray, bod
 	_process_scene_json(scene_json)
 	all_scene_jsons.append(scene_json)
 	emit_signal("scene_json_ready", scene_json)
-	call_deferred("request_all_images", scene_json, current_scene_index)
 
 func _process_scene_json(scene_json: Dictionary):
 	var clean_prompt: Callable = func(p: String) -> String: return p.strip_edges().replace("\n", " ")
@@ -185,6 +198,7 @@ func get_expected_image_ids(scene_json: Dictionary, scene_index: int) -> Array:
 	return ids
 
 func request_all_images(scene_json: Dictionary, scene_index: int) -> void:
+	print("🎯 AIClient.request_all_images called with scene_index: ", scene_index)
 	current_scene_index = scene_index
 	var all_prompts := []
 	var seen_ids := {}
@@ -236,37 +250,115 @@ func _reset_state_for_new_scene():
 	# Do not clear highlight_summaries/all_scene_jsons here, only on full game reset
 
 func _request_image(id: String, prompt: String, is_retry := false):
+	var max_retries := 3
+	if not retry_counts.has(id):
+		retry_counts[id] = 0
+
 	var http_request := HTTPRequest.new()
 	add_child(http_request)
 
 	var body := {
 		"prompt": prompt,
 		"size": "1024x1024",
-		"n": 1
+		"background": "transparent",
+		"quality": "low",
+		"output_compression": 100,
+		"output_format": "png",
+		"n": 1,
+		"moderation": "low"
 	}
 
 	http_request.request_completed.connect(
 		func(result, code, headers, body):
 			http_request.queue_free()
 			if code != 200:
-				print("❌ Image generation failed for %s." % id)
+				print("❌ Image generation failed for %s. Code: %s" % [id, str(code)])
+				retry_counts[id] += 1
+				if retry_counts[id] < max_retries:
+					print("🔄 Retrying image %s (attempt %d/%d)" % [id, retry_counts[id]+1, max_retries])
+					_request_image(id, prompt, true)
+				else:
+					print("❌ Max retries reached for %s, giving up." % id)
+					images_finished += 1
+					_check_all_images_ready()
 				return
 
 			var response_text: String = body.get_string_from_utf8()
 			var json_result: Dictionary = JSON.parse_string(response_text)
 			if json_result.has("data"):
-				var image_url = json_result["data"][0]["url"]
-				_download_image(id, image_url)
+				var data0 = json_result["data"][0]
+				if data0.has("b64_json"):
+					# Image is base64, save it directly
+					var image_bytes = Marshalls.base64_to_raw(data0["b64_json"])
+					var path: String = "user://%s.png" % id
+					var file := FileAccess.open(path, FileAccess.WRITE)
+					file.store_buffer(image_bytes)
+					file.close()
+					emit_signal("image_ready", id, path)
+					images_finished += 1
+					_check_all_images_ready()
+				elif data0.has("url"):
+					# Fallback for url (old endpoint)
+					var image_url = data0["url"]
+					_download_image(id, image_url)
+				else:
+					print("❌ Neither b64_json nor url found in response for:", id)
+					images_finished += 1
+					_check_all_images_ready()
 			else:
-				print("❌ No image URL found in response for:", id)
+				print("❌ No image data found in response for:", id)
+				images_finished += 1
+				_check_all_images_ready()
 	)
-	http_request.request(IMAGE_REQUEST_URL, HEADERS, HTTPClient.METHOD_POST, JSON.stringify(body))
+	# Use GPT-Image-1 endpoint and header for image requests
+	http_request.request(IMAGE_REQUEST_URL_GPT1, get_image_headers(), HTTPClient.METHOD_POST, JSON.stringify(body))
+
+func _rephrase_and_retry_image(id: String, original_prompt: String):
+	var http_request := HTTPRequest.new()
+	add_child(http_request)
+
+	var rephrase_prompt := """Please rephrase this DALL-E 3 prompt to be clearer and more specific while keeping the same intent. Make it more descriptive and add details that will help generate a better image. Original prompt: "%s"\n\nReturn ONLY the rephrased prompt, nothing else.""" % original_prompt
+
+	var body := {
+		"messages": [
+			{"role": "user", "content": rephrase_prompt}
+		],
+		"max_tokens": 200,
+		"temperature": 0.7
+	}
+
+	http_request.request_completed.connect(
+		func(result, code, headers, body):
+			http_request.queue_free()
+			if code != 200:
+				print("❌ Image rephrase/retry failed for %s." % id)
+				images_finished += 1
+				_check_all_images_ready()
+				return
+
+			var response_text: String = body.get_string_from_utf8()
+			var json_result: Dictionary = JSON.parse_string(response_text)
+			# Use the rephrased prompt for another image retry if needed
+			if json_result.has("choices") and json_result["choices"].size() > 0:
+				var rephrased = json_result["choices"][0]["message"]["content"]
+				_request_image(id, rephrased, true)
+			else:
+				print("❌ Rephrase returned no choices, giving up for:", id)
+				images_finished += 1
+				_check_all_images_ready()
+	)
+	http_request.request(GPT_REPHRASE_URL, get_text_headers(), HTTPClient.METHOD_POST, JSON.stringify(body))
+
+func _check_all_images_ready():
+	if images_finished >= total_images_requested and total_images_requested > 0:
+		emit_signal("all_images_ready")
 
 func _download_image(id: String, url: String):
 	var http_request := HTTPRequest.new()
 	add_child(http_request)
 	http_request.request_completed.connect(
 		func(result, response_code, headers, body):
+			http_request.queue_free()
 			if response_code == 200:
 				var path: String = "user://%s.png" % id
 				var file := FileAccess.open(path, FileAccess.WRITE)
@@ -274,9 +366,11 @@ func _download_image(id: String, url: String):
 				file.close()
 				emit_signal("image_ready", id, path)
 				images_finished += 1
-				# Do not emit all_images_ready here – handled by game.gd based on expected_image_ids!
+				_check_all_images_ready()
 			else:
 				print("❌ Failed to download image for:", id)
+				images_finished += 1
+				_check_all_images_ready()
 	)
 	http_request.request(url)
 

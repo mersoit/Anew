@@ -25,6 +25,7 @@ var game_ending: bool = false
 var next_scene_delay_timer: Timer = null
 var progression_flags := {}
 var expected_image_ids: Array = []
+var scene_generation_in_progress: bool = false
 
 func _ready():
 	camera.make_current()
@@ -80,12 +81,18 @@ func _on_scene_ready(scene_index: int):
 func generate_scene(scene_id: int):
 	print("🚀 Generating scene %d with topic '%s' and theme '%s'" % [scene_id, topic, theme])
 	loading_label.text = "Generating scene %d..." % scene_id
-	ai_client.current_scene_id = "scene%d" % scene_id
-	var history := _build_history_summary()
-	ai_client.request_scene_json(topic, theme, history)
-	waiting_for_images = true
+
+	# Fully reset state for this scene
+	image_paths.clear()
+	expected_image_ids.clear()
 	all_images_finalized = false
 	scene_ready_queued = false
+	waiting_for_images = true
+	current_scene_index = scene_id
+
+	ai_client.current_scene_id = "scene%d" % scene_id
+	var history := _build_history_summary()
+	ai_client.request_scene_json(topic, theme, history, scene_id)
 
 func _on_scene_json_received(scene_json: Dictionary) -> void:
 	print("📥 Game received scene JSON")
@@ -106,6 +113,7 @@ func _on_scene_json_received(scene_json: Dictionary) -> void:
 func _on_image_ready(id: String, path: String):
 	image_paths[id] = path
 	print("📸 Image ready:", id, "→", path)
+	# Always re-check if all expected images are present, even for late arrivals
 	if not all_images_finalized and expected_image_ids.size() > 0:
 		var all_ready = true
 		for expected_id in expected_image_ids:
@@ -119,6 +127,25 @@ func _on_all_images_ready():
 	if all_images_finalized:
 		print("⚠️ Scene already finalized, skipping redundant build.")
 		return
+
+	# Check if ALL expected images are present before building
+	var missing_images := []
+	for expected_id in expected_image_ids:
+		if not image_paths.has(expected_id):
+			missing_images.append(expected_id)
+
+	if missing_images.size() > 0:
+		# Print what is missing for debugging
+		for missing_id in missing_images:
+			if missing_id.ends_with("background"):
+				print("⚠️ Background image missing, using fallback color")
+			elif missing_id.ends_with("player"):
+				print("⚠️ Player image missing")
+			else:
+				print("⚠️ Missing image:", missing_id)
+		print("⏳ Waiting for missing images before building scene:", missing_images)
+		return
+
 	print("✅ All images finalized. Building scene now...")
 	_build_scene()
 
@@ -149,6 +176,7 @@ func _build_scene():
 		if image_paths.has("scene_%d_player" % current_scene_index):
 			p.set_sprite(image_paths["scene_%d_player" % current_scene_index])
 		add_child(p)
+		await get_tree().process_frame
 
 	for npc_data in scene_json.get("npcs", []):
 		var positions = npc_data.get("locations", [])
@@ -159,11 +187,11 @@ func _build_scene():
 			n.position = _grid_to_pos(pos)
 			n.set_data(npc_data)
 			n.set("dialogue_tree", npc_data.get("dialogue_tree", {}))
-			n.set("scene_transition", scene_transition)
 			var npc_id = "scene_%d_npc_%s" % [current_scene_index, npc_data.get("id", "")]
 			if image_paths.has(npc_id):
 				n.set_sprite(image_paths[npc_id])
 			add_child(n)
+			await get_tree().process_frame
 
 	for obj_data in scene_json.get("objects", []):
 		var positions = obj_data.get("locations", [])
@@ -174,19 +202,28 @@ func _build_scene():
 			o.position = _grid_to_pos(pos)
 			o.set_data(obj_data)
 			o.set("dialogue_tree", obj_data.get("dialogue_tree", {}))
-			o.set("scene_transition", scene_transition)
 			var obj_id = "scene_%d_obj_%s" % [current_scene_index, obj_data.get("id", "")]
 			if image_paths.has(obj_id):
 				o.set_sprite(image_paths[obj_id])
 			add_child(o)
+			await get_tree().process_frame
 
 	loading_label.text = ""
 	if scene_ready_queued:
 		next_scene() # Instead of scene_transition.next_scene()
+	scene_generation_in_progress = false 
 
 func next_scene():
-	current_scene_index += 1
+	if scene_generation_in_progress:
+		print("⏳ Scene generation already in progress, skipping duplicate next_scene call.")
+		return
+	scene_generation_in_progress = true
+	current_scene_index += 1  # Increment index here, just before generation
 	_clear_scene()
+	# Reset image paths and related state here for the new scene
+	image_paths.clear()
+	expected_image_ids.clear()
+	all_images_finalized = false
 	generate_scene(current_scene_index)
 
 func _on_dialogue_finished(outcome: String):
@@ -256,17 +293,47 @@ func _show_ending_slides():
 	loading_label.text = "1. " + highlight_slides[0].get("summary", "")
 
 func switch_dialogue_node(target_id: String, new_root: String):
+	print("🎯 Attempting to switch dialogue for %s to root: %s" % [target_id, new_root])
+	
+	# Search through all children to find the target
 	for child in get_children():
-		var cid = child.get("id") if child.has_method("get") else null
-		var tree = child.get("dialogue_tree") if child.has_method("get") else null
-		if cid != null and cid == target_id:
-			if tree != null and typeof(tree) == TYPE_DICTIONARY and tree.has(new_root):
-				tree["root"] = new_root
-				print("🔀 Dialogue for %s now starts at %s" % [target_id, new_root])
-			else:
-				print("⚠️ No such root node: %s in %s" % [new_root, target_id])
+		if not is_instance_valid(child):
+			continue
+			
+		# Check if this child has an ID that matches
+		var child_id = ""
+		if child.has_method("get") and child.get("id") != null:
+			child_id = child.get("id")
+		
+		# Check both exact match and partial match (in case of suffixes)
+		if child_id == target_id or child_id.begins_with(target_id + "_"):
+			print("✅ Found matching entity: %s (id: %s)" % [child.name, child_id])
+			
+			# Found the target, update its dialogue tree
+			if child.has_method("get_dialogue_tree"):
+				var tree = child.get_dialogue_tree()
+				if tree != null and typeof(tree) == TYPE_DICTIONARY:
+					if tree.has(new_root):
+						# Create a new tree structure with the new root as "root"
+						var new_tree = tree.duplicate(true)
+						new_tree["root"] = new_tree[new_root]
+						
+						# Update the child's dialogue tree
+						if child.has_method("set"):
+							child.set("dialogue_tree", new_tree)
+							print("✅ Successfully switched %s dialogue to start at: %s" % [target_id, new_root])
+					else:
+						print("⚠️ No such root node: %s in %s's dialogue tree" % [new_root, target_id])
+						print("  Available nodes: ", tree.keys())
+				else:
+					print("⚠️ Invalid dialogue tree for %s" % target_id)
 			return
-	print("⚠️ Could not find target for dialogue switch: %s" % target_id)
+	
+	print("⚠️ Could not find target with id: %s" % target_id)
+	print("  Available IDs:")
+	for child in get_children():
+		if child.has_method("get") and child.get("id") != null:
+			print("    - %s" % child.get("id"))
 
 func _clear_scene():
 	for child in get_children():

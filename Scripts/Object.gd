@@ -4,6 +4,7 @@ extends Area2D
 @onready var label_node: Label = $Label
 @onready var collision_shape: CollisionShape2D = $CollisionShape2D
 @onready var shape: RectangleShape2D = collision_shape.shape
+@export var interaction_distance := 36.0
 
 const GRID_SIZE = 16
 const GRID_WIDTH = 32
@@ -12,7 +13,6 @@ const GRID_HEIGHT = 24
 var display_name: String = ""
 var label: String = ""
 var interaction: String = ""
-var scene_transition: Node = null
 var id: String = ""
 var raw_size: float = 32.0
 var dialogue_tree := {}
@@ -31,11 +31,11 @@ func _ready():
 	if id == "":
 		id = "obj_" + name.to_lower()
 
-	var client = get_node_or_null("/root/AIClient")
+	var client = get_node_or_null("/root/Game/AIClient")  # Use full path
 	if client:
 		client.connect("image_ready", Callable(self, "_on_image_ready"))
 	else:
-		print("⚠️ AIClient singleton not found in Object._ready()")
+		print("⚠️ AIClient not found in Player._ready()")
 
 	if is_instance_valid(label_node):
 		label_node.visible = false
@@ -79,7 +79,7 @@ func set_data(data: Dictionary):
 	if data.has("location"):
 		set_location(Vector2i(data["location"][0], data["location"][1]))
 	if data.has("id"):
-		id = "obj_" + str(data["id"])
+		id = str(data["id"])  # Remove the "obj_" prefix here
 
 func set_sprite(path: String):
 	await ready
@@ -88,7 +88,6 @@ func set_sprite(path: String):
 	if file:
 		var err := img.load_png_from_buffer(file.get_buffer(file.get_length()))
 		if err == OK:
-			make_edge_white_transparent(img, 0.97)
 			var tex := ImageTexture.create_from_image(img)
 			if is_instance_valid(sprite):
 				sprite.texture = tex
@@ -106,15 +105,14 @@ func set_sprite(path: String):
 	else:
 		print("❌ Failed to load image file at:", path)
 
-func _is_white(c: Color, threshold := 0.97) -> bool:
-	return c.r >= threshold and c.g >= threshold and c.b >= threshold
-
-func make_edge_white_transparent(img: Image, threshold := 0.97):
-	img.convert(Image.FORMAT_RGBA8)	
+func make_edge_white_transparent(img: Image, threshold := 0.95):
+	img.convert(Image.FORMAT_RGBA8)
 	var w = img.get_width()
 	var h = img.get_height()
 	var visited := {}
 	var queue := []
+
+	# --- 1. Flood-fill edge background ---
 	for x in range(w):
 		for y in [0, h-1]:
 			if _is_white(img.get_pixel(x, y), threshold):
@@ -127,6 +125,7 @@ func make_edge_white_transparent(img: Image, threshold := 0.97):
 				var v = Vector2i(x, y)
 				queue.append(v)
 				visited[v] = true
+	
 	var dirs = [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]
 	while not queue.is_empty():
 		var v: Vector2i = queue.pop_front()
@@ -134,13 +133,49 @@ func make_edge_white_transparent(img: Image, threshold := 0.97):
 		for d in dirs:
 			var n = v + d
 			if n.x >= 0 and n.x < w and n.y >= 0 and n.y < h:
-				if not visited.has(n):
-					if _is_white(img.get_pixel(n.x, n.y), threshold):
-						queue.append(n)
-						visited[n] = true
+				if not visited.has(n) and _is_white(img.get_pixel(n.x, n.y), threshold):
+					queue.append(n)
+					visited[n] = true
+
+	# --- 2. Aggressive cleanup: remove ALL remaining (isolated) white pixels ---
+	for y in range(h):
+		for x in range(w):
+			var pixel = img.get_pixel(x, y)
+			if _is_white(pixel, threshold) and pixel.a > 0.5:
+				img.set_pixel(x, y, Color(0,0,0,0))
+
+	# --- 3. Smart pass: Remove small background islands inside sprite using local neighborhood ---
+	# (removes "holes" of off-white inside sprite body)
+	var to_clear := []
+	for y in range(1, h-1):
+		for x in range(1, w-1):
+			var c = img.get_pixel(x, y)
+			if _is_white(c, threshold) and c.a > 0.5:
+				var neighbor_alpha_sum = 0.0
+				var neighbor_count = 0
+				for dy in [-1,0,1]:
+					for dx in [-1,0,1]:
+						if dx == 0 and dy == 0:
+							continue
+						var n = img.get_pixel(x+dx, y+dy)
+						neighbor_alpha_sum += n.a
+						neighbor_count += 1
+				if neighbor_alpha_sum < neighbor_count * 0.5:
+					# Most neighbors are already transparent, so this is likely background
+					to_clear.append(Vector2i(x, y))
+	for v in to_clear:
+		img.set_pixel(v.x, v.y, Color(0,0,0,0))
+
+func _is_white(c: Color, threshold := 0.95) -> bool:
+	var brightness = (c.r + c.g + c.b) / 3.0
+	return brightness >= threshold and c.a > 0.5
 
 func on_interact():
 	print("🖱️ Object clicked:", display_name)
+	var player = get_tree().get_first_node_in_group("player")
+	if player and global_position.distance_to(player.global_position) > interaction_distance:
+		print("📏 Too far from player, ignoring interaction")
+		return
 	get_node("/root/Game").record_event("interacted with object: \"%s\"" % display_name)
 
 	if is_instance_valid(label_node):
@@ -178,9 +213,12 @@ func do_action(action: Dictionary):
 	if action.has("color") and is_instance_valid(sprite):
 		sprite.modulate = Color(action["color"][0], action["color"][1], action["color"][2])
 
-	if action.has("trigger") and action["trigger"] == "next_scene" and scene_transition:
+	if action.has("trigger") and action["trigger"] == "next_scene":
 		get_node("/root/Game").record_event("interacted with %s" % display_name)
-		scene_transition.next_scene()
+		# Call the game's next_scene function instead
+		var game = get_node("/root/Game")
+		if game and game.has_method("next_scene"):
+			game.call_deferred("next_scene")
 
 func get_dialogue_tree():
 	return dialogue_tree

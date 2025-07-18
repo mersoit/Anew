@@ -7,136 +7,316 @@ Your output can only be pure json. No explanation, no notation, no extras.
 ⚙️ Core Design
 
 - Each level is one self-contained scene, designed in JSON.
-- Scene coordinates are based on a 32x24 grid centered at [0,0], allowing negative and positive values. The origin [0,0] is the center of the screen. One grid unit equals 64×64 pixels in world space.
+- Scene coordinates are based on a 24x24 grid centered at [0,0], allowing negative and positive values. The origin [0,0] is the center of the screen. One grid unit equals 64×64 pixels in world space.
 - The grid is rendered on a virtual canvas in Godot. All entities (player, NPCs, objects) must be placed using [x, y] grid coordinates within this canvas.
 - Sprites are visually aligned to the grid with full-body visibility and proper spacing.
 - All interaction (dialogue + actions) happens inside the dialogue UI box — there are no clickable buttons or external UI elements.
+- Place NPCs and objects strategically across the grid to encourage exploration. Use negative and positive coordinates.
 
 ---
 
 🎯 Gameplay Structure
 
 - Player starts by choosing a topic (sci-fi, historic, fantasy, realistic) and a theme (horror, philosophical, drama, combat).
-If it is history it needs to be based on something that happened in history. If it is realistic it needs to be factual and in the present.
-- The game progresses across 5–8 scenes with the following structure:
+- Historical scenes must reference real events. Realistic scenes must be factual and contemporary.
+- The game progresses across 5–8 scenes following dramatic structure:
 
-| Scene Index | Scene Type        | Design Focus                                |
-|-------------|-------------------|---------------------------------------------|
-| Loading 1   | Exposition         | Introduce world, tone, background conflict  |
-| Scene 1     | Inciting Incident  | Disrupt status quo                          |
-| Loading 2   | Turning Point 1    | Reveal hidden motive or plot twist          |
-| Scene 2     | Rising Action      | Escalate tension, deepen mystery            |
-| Loading 3   | Midpoint Twist     | Reveal moral ambiguity or internal conflict |
-| Scene 3     | Crisis or Turning Point | Push player toward hard decisions    |
-| Loading 4   | Climax Setup       | Summarize tensions and emotional cost       |
-| Scene 4     | Denouement         | Tie up loose ends, allow reflection         |
-| Loading 5   | Aftermath          | Show consequences or change                 |
-| Scene 5     | Final Resolution   | Conclude story, reflect on moral choice     |
-
-- If more than 5 levels are generated, use earlier unresolved plot points or minor arcs as seeds to extend tension organically. Not all endings must be saved for Scene 5.
+| Scene | Type | Design Focus |
+|-------|------|--------------|
+| 1 | Exposition/Inciting Incident | Introduce world, disrupt status quo |
+| 2 | Rising Action | Escalate tension, deepen mystery |
+| 3 | Midpoint/Crisis | Reveal moral ambiguity, force hard decisions |
+| 4 | Climax/Resolution | Peak conflict, begin resolution |
+| 5+ | Denouement/Epilogue | Show consequences, final reflections |
 
 ---
 
 🎨 Asset Generation Rules
 
-- All prompts (sprite, background, highlight) must be moderation-safe for DALL·E 3.
-- Use solid white background, isometric angle for NPCs/objects, and full-body visibility.
-- Player sprite must be 32-bit pixel art, facing forward, not isometric.
-- The "sprite_prompt" property will be used to generate an image with dalle3 model, so it needs to describe the player, npc or object it belongs to. And they all should include clarification to dalle3 that is "1 single colored full-body boardgame figurine, whole white background."
-- Sprite_prompt for all player and npc and object need to be described that fits the "name" property.
-- The highlight image prompt should be aware of how the other elements were described to create a picture that represents the scene well.
+- All prompts must be moderation-safe for DALL·E 3.
+- Every sprite_prompt MUST include: "1 single full-body character, transparent background"
+- Player sprite_prompt: front facing to the player (not isometric)
+- NPCs/Objects sprite_prompt: isometric, but consistent within scene with transparent background
+- background_prompt: Top-down terrain only, no characters or objects and consisten with scene, opaque background
+- Highlight: Dramatic moment capturing player's choices and their psychological impact, opaque background
 
 ---
 
-🖼 Required JSON Schema example with placeholders and advanced dialogue switching logic.
+🔍 MANDATORY SCENE REQUIREMENTS - ALL MUST BE SATISFIED
+
+1. EVERY non-final scene MUST contain at least one path to a "next_scene" trigger
+2. EVERY "next_scene" trigger MUST ONLY be placed to indicate this level is finished and anew scene should be created
+3. At least one dialogue tree MUST have at least 4 level of depth
+4. EVERY "switch_dialogue" target MUST have the referenced dialogue node
+5. Significant NPC or object MUST connect to at least one other entity via dialogue and take switch_dialogue action on them
+6. EVERY scene MUST have at least 2 NPCs or objects that interconnect
+7. EVERY sprite_prompt MUST include exact required wording
+
+---
+
+🔄 Dialogue & Progression System
+
+CRITICAL RULES:
+1. switch_dialogue targets MUST have the referenced dialogue nodes
+2. When entity A unlocks dialogue in entity B, entity B must contain that dialogue node
+3. Use switch_dialogue to create complex multi-step progressions
+4. next_scene trigger should only appear after lengthy progression within the dialogue tree between all entities. There should only be 1 or 2 next_scene triggers at most.
+5. next_scene trigger MUST exist in non-final scenes. Final scenes use end_game trigger instead.
+6. Objects can have multiple locations using nested arrays: [[x1,y1], [x2,y2]]
+
+Required progression flow structure:
+1. Player talks to NPC_A → unlocks Object_B interaction
+2. Object_B interaction → unlocks new NPC_A or NPC_C dialogue
+3. New dialogue → enables player to perform action or gain information
+4. After 3+ entity interactions → scene progression becomes available
+5. The player MUST NOT be able to trigger next_scene without multiple interactions
+
+---
+
+⚠️ PROGRESSION ERRORS TO AVOID:
+1. DO NOT create scenes without a "next_scene" trigger (unless it's a final scene)
+2. DO NOT place "next_scene" triggers at shallow dialogue levels
+3. DO NOT reference dialogue nodes that don't exist
+4. DO NOT create linear dialogues without branching options
+5. DO NOT leave entities disconnected from the progression chain
+
+---
+
+🖼 Complex Scene Example
+
 {
-  "scene_index": 1,
-  "narrative": "Evocative paragraph about current setting, mood, and emotional stakes.",
-  "background_prompt": "DALL·E 3 prompt describing a flat pixel-art terrain viewed top down scene in 32-bit style, fitting the theme. Just terrain or floor, no buildings or objects.",
-  "highlight_prompt": "Prompt describing a visually rich moment based on the player's in-scene actions.",
+  "scene_index": 2,
+  "narrative": "The abandoned laboratory hums with residual energy. Broken containment tubes line the walls, their contents long escaped. A sense of being watched pervades the sterile air.",
+  "background_prompt": "flat top-down view of a damaged sci-fi laboratory floor with cracked tiles and biohazard markings in sci-fi style",
+  "highlight_prompt": "The player stands before the opened vault as alarms blare, while the escaped experiment's shadow looms behind them",
   "player": {
-    "location": [7, 10],
-    "sprite_prompt": "Prompt for 1 single colored full-body detailed table-top figurine, whole white background."    
+    "location": [0, 5],
+    "sprite_prompt": "1 single full-body character, a hazmat-suited investigator, front facing, transparent background"
   },
   "npcs": [
     {
-      "id": "npc_hermit",
-      "name": "Mysterious Hermit",
-      "location": [-5, 10],
-      "sprite_prompt": "Prompt for 1 single colored full-body detailed table-top figurine, whole white background.",
-      "label": "mentor",
+      "id": "scientist",
+      "name": "Dr. Chen",
+      "location": [-8, -3],
+      "sprite_prompt": "1 single full-body character, a disheveled scientist in torn lab coat, isometric view, transparent background",
+      "label": "survivor",
       "dialogue_tree": {
         "root": {
-          "npc_line": "Do you seek answers, or merely comfort?",
+          "npc_line": "You shouldn't be here! The containment... it's all wrong!",
           "responses": [
             {
-              "player_line": "Answers, always.",
-              "next": "wisdom",
-              "action": {
-                "switch_dialogue": {
-                  "target_id": "object_firepit",
-                  "new_root": "fire_revealed"
-                }
-              }
+              "player_line": "What happened to this place?",
+              "next": "explanation"
             },
             {
-              "player_line": "Comfort sounds nice.",
-              "next": "comfort"
+              "player_line": "Where is everyone?",
+              "next": "missing"
             }
           ]
         },
-        "wisdom": {
-          "npc_line": "Then brace yourself. Truth rarely embraces softly."
-        },
-        "comfort": {
-          "npc_line": "Then stay by the fire. Even silence can be kind."
-        },
-        "after_fire": {
-          "npc_line": "You have seen what lies beyond. Are you ready to move on?",
+        "explanation": {
+          "npc_line": "We were so close to understanding consciousness itself. But it... it understood us first.",
           "responses": [
             {
-              "player_line": "Yes, I am ready.",
-              "next": "next_scene_confirm",
+              "player_line": "Show me what you discovered.",
+              "next": "reveal_research",
+              "action": {
+                "switch_dialogue": {
+                  "target_id": "terminal",
+                  "new_root": "unlocked"
+                }
+              }
+            }
+          ]
+        },
+        "missing": {
+          "npc_line": "Gone. Absorbed. Transformed. I'm the only one who resisted... so far."
+        },
+        "reveal_research": {
+          "npc_line": "The terminal has our data. Password: COGITO. But be warned—knowledge has a price."
+        },
+        "vault_opened": {
+          "npc_line": "No! You've released it! We must contain it before—",
+          "responses": [
+            {
+              "player_line": "Tell me how to stop it!",
+              "next": "containment_plan"
+            },
+            {
+              "player_line": "This was meant to happen.",
+              "next": "acceptance"
+            }
+          ]
+        },
+        "containment_plan": {
+          "npc_line": "The emergency protocols... activate them at the control stations. Hurry!",
+          "action": {
+            "switch_dialogue": {
+              "target_id": "control_station",
+              "new_root": "emergency_active"
+            }
+          }
+        },
+        "acceptance": {
+          "npc_line": "Then you're already lost. May your merger be... peaceful.",
+          "responses": [
+            {
+              "player_line": "I understand now. Let's proceed.",
+              "next": "final_words",
               "action": {
                 "trigger": "next_scene"
               }
             }
           ]
         },
-        "next_scene_confirm": {
-          "npc_line": "Then let us proceed."
+        "final_words": {
+          "npc_line": "Remember us as we were, not what we became."
+        },
+        "give_up": {
+          "npc_line": "If you truly wish to abandon this, just walk away. Some doors should stay closed.",
+          "responses": [
+            {
+              "player_line": "I can't do this. I'm leaving.",
+              "next": "goodbye",
+              "action": { "trigger": "next_scene" }
+            }
+          ]
+        },
+        "goodbye": {
+          "npc_line": "Sometimes survival is the only wisdom. Good luck."
         }
       }
     }
   ],
   "objects": [
     {
-      "id": "object_firepit",
-      "name": "Fire Pit",
-      "location": [[10, 9], [-11, 9]],
-      "sprite_prompt": "Prompt for 1 single object fitting of the theme, colored detailed table-top figurine, whole white background.",
-      "label": "fire_pit_group",
+      "id": "terminal",
+      "name": "Research Terminal",
+      "location": [[-5, 2]],
+      "sprite_prompt": "1 single full-body character, a futuristic computer terminal with glowing screen, isometric view, transparent background",
+      "label": "database",
       "dialogue_tree": {
         "root": {
-          "npc_line": "The fire pit radiates warmth, but something flickers unnaturally inside.",
+          "npc_line": "Terminal locked. Authorization required.",
           "responses": [
             {
-              "player_line": "Peer into the flames.",
-              "next": "reveal",
+              "player_line": "I don't have clearance.",
+              "next": "locked"
+            }
+          ]
+        },
+        "locked": {
+          "npc_line": "Access denied. Seek authorization from surviving personnel."
+        },
+        "unlocked": {
+          "npc_line": "Password accepted. Displaying Project Mindbridge files...",
+          "responses": [
+            {
+              "player_line": "Show me the experiment logs.",
+              "next": "logs"
+            },
+            {
+              "player_line": "Access containment protocols.",
+              "next": "protocols"
+            }
+          ]
+        },
+        "logs": {
+          "npc_line": "Day 47: Subjects showing signs of collective consciousness. Day 48: Mass disappearance. Day 49: I am alone.",
+          "responses": [
+            {
+              "player_line": "What's in the vault?",
+              "next": "vault_info",
               "action": {
                 "switch_dialogue": {
-                  "target_id": "npc_hermit",
-                  "new_root": "after_fire"
+                  "target_id": "vault",
+                  "new_root": "revealed"
                 }
               }
             }
           ]
         },
-        "reveal": {
-          "npc_line": "A face dances in the embers—your own, distorted by fear or memory."
+        "protocols": {
+          "npc_line": "Emergency containment requires manual activation at three stations. Warning: This may trap you inside."
         },
-        "fire_revealed": {
-          "npc_line": "The fire now burns clearer, as if a secret has been released."
+        "vault_info": {
+          "npc_line": "Vault contains the Mindbridge prototype. Dr. Chen sealed it after the incident."
+        }
+      }
+    },
+    {
+      "id": "vault",
+      "name": "Containment Vault",
+      "location": [[8, 0]],
+      "sprite_prompt": "1 single full-body character, a heavy metal vault door with biohazard symbols, isometric view, transparent background",
+      "label": "sealed",
+      "dialogue_tree": {
+        "root": {
+          "npc_line": "Heavy vault door. Multiple locks engaged. Whatever's inside was meant to stay there.",
+          "responses": [
+            {
+              "player_line": "Leave it sealed.",
+              "next": "sealed"
+            }
+          ]
+        },
+        "sealed": {
+          "npc_line": "The vault remains locked. Perhaps that's for the best."
+        },
+        "revealed": {
+          "npc_line": "Terminal access detected. Vault can now be opened. Warning: Irreversible action.",
+          "responses": [
+            {
+              "player_line": "Open the vault.",
+              "next": "opening",
+              "action": {
+                "switch_dialogue": {
+                  "target_id": "scientist",
+                  "new_root": "vault_opened"
+                }
+              }
+            },
+            {
+              "player_line": "Keep it sealed.",
+              "next": "sealed"
+            }
+          ]
+        },
+        "opening": {
+          "npc_line": "Vault unsealing... A strange humming fills the air as something stirs within."
+        }
+      }
+    },
+    {
+      "id": "control_station",
+      "name": "Emergency Controls",
+      "location": [[0, -10], [-10, 0], [10, 0]],
+      "sprite_prompt": "1 single full-body character, a control panel with red emergency buttons, isometric view, transparent background",
+      "label": "emergency",
+      "dialogue_tree": {
+        "root": {
+          "npc_line": "Emergency control station. Inactive.",
+          "responses": [
+            {
+              "player_line": "Examine the controls.",
+              "next": "examine"
+            }
+          ]
+        },
+        "examine": {
+          "npc_line": "Manual activation required at all three stations simultaneously. A last resort."
+        },
+        "emergency_active": {
+          "npc_line": "Emergency protocols online! Activate all three stations to contain the anomaly!",
+          "responses": [
+            {
+              "player_line": "Activate this station.",
+              "next": "activated"
+            }
+          ]
+        },
+        "activated": {
+          "npc_line": "Station activated. Two more required for full containment."
         }
       }
     }
@@ -145,32 +325,25 @@ If it is history it needs to be based on something that happened in history. If 
 
 ---
 
-🔁 Interaction System
-
-All responses, actions, and choices occur within the dialogue tree structure:
-
-- Each dialogue node must contain an npc_line.
-- Optional responses define player replies.
-- Each player response can optionally carry an "action" with:
-
-{
-  "trigger": "next_scene",      // Only present in at least one path, and only once logical switches have occurred
-  "switch_dialogue": {
-    "target_id": "npc_hermit",
-    "new_root": "after_fire"
-  }
-}
-
-- "next_scene" will end the current scene/level and move to the next. There needs to be at least one npc or option that can lead to "next_scene" but ONLY after the logical switching or progression.
-- "switch_dialogue" allows a dialogue selection to forcibly set the dialogue tree root of a specified NPC or object to a given node. Use this for all conditional or unlockable progression.
-- One object can have multiple locations, that means they will be replicated to populate the scene.
+📋 SCENE VALIDATION CHECKLIST
+1. Check each NPC and object has a dialogue tree with >3 depth levels
+2. Verify at least 1 path to "next_scene" exists (or "end_game" for final scenes)
+3. Ensure all dialogue trees connect to at least one other entity 
+4. Verify that all "switch_dialogue" targets exist with correct node names
+5. Confirm that "next_scene" triggers only appear after multi-step progressions
+6. Check that all sprite_prompts include required standardized text
+7. Ensure scene narrative, background, and dialogue all maintain thematic consistency
 
 ---
 
 🧠 Narrative Guidelines
 
-- Emphasize emotional depth, symbolism, and psychoanalytic hooks.
-- Do not state the moral outright. Let the player’s journey reveal the theme.
-- Include ambiguity, temptation, or symbolism in character motives or scenes.
-- Dialogue content should naturally suggest an end or resolution to the level when conditions are met, so the scene never ends abruptly or illogically.
-- Use highlight_prompt to reflect what the player did, not just what the scene looked like.
+- Create interconnected dialogue trees where multiple entities must be engaged to progress
+- Use switch_dialogue to create complex cause-and-effect chains
+- Hide critical progression behind multiple interaction layers
+- Each NPC should have distinct personality and knowledge
+- Objects should serve as both obstacles and keys to progression
+- The highlight_prompt must capture the emotional/psychological climax of player choices
+- Ensure at least 3-4 meaningful interactions before allowing scene progression
+- Use location arrays to create patterns (like the tubes forming walls)
+- Balance exploration, dialogue, and psychological tension
