@@ -2,7 +2,6 @@ extends CanvasLayer
 
 signal dialogue_finished_with_outcome(outcome: String)
 signal dialogue_finished
-signal trigger_end # Signal for ending the game and showing highlight slides
 
 @onready var panel: Panel = $Panel
 @onready var label: Label = $Panel/Label
@@ -14,11 +13,12 @@ var dialogue_tree: Dictionary = {}
 var current_node: String = ""
 var root_game: Node = null
 var dialogue_active: bool = false
+var trigger_next_scene_on_close: bool = false
 
 func start_dialogue(npc: Node, tree: Dictionary):
-	if dialogue_active:
-		return
+	if dialogue_active: return
 	dialogue_active = true
+	trigger_next_scene_on_close = false
 	visible = true
 	if is_instance_valid(portrait_sprite):
 		portrait_sprite.visible = false
@@ -27,7 +27,6 @@ func start_dialogue(npc: Node, tree: Dictionary):
 	current_node = "root" if tree.has("root") else tree.keys()[0]
 	panel.visible = true
 	label.visible = true
-	# Show and set portrait
 	if is_instance_valid(portrait_sprite):
 		var tex = null
 		if is_instance_valid(npc) and npc.has_node("Sprite"):
@@ -60,72 +59,71 @@ func _show_node():
 	var node = dialogue_tree[current_node]
 	label.text = node.get("npc_line", "[...]")
 
-	for option in node.get("responses", []):
+	var responses = node.get("responses", [])
+	if responses.is_empty():
+		get_tree().create_timer(2.0).timeout.connect(_end_dialogue)
+		return
+
+	for option in responses:
 		var btn := Button.new()
 		btn.text = option.get("player_line", "...")
 		btn.pressed.connect(_on_option_selected.bind(option))
 		button_container.add_child(btn)
 
 func _on_option_selected(option: Dictionary):
-	# Store if this is a next_scene trigger
-	var should_trigger_next_scene = false
-	
-	# Process the action FIRST, before changing current_node
 	if option.has("action"):
 		var action = option["action"]
-		if action != null and typeof(action) == TYPE_DICTIONARY:
-			# Handle dialogue switching
+		if action != null and typeof(action) == TYPE_DICTIONARY and is_instance_valid(root_game):
 			if action.has("switch_dialogue"):
 				var switch_data = action["switch_dialogue"]
-				if switch_data.has("target_id") and switch_data.has("new_root") and root_game:
-					print("🔄 Switching dialogue for %s to %s" % [switch_data["target_id"], switch_data["new_root"]])
+				if switch_data.has("target_id") and switch_data.has("new_root"):
 					root_game.switch_dialogue_node(switch_data["target_id"], switch_data["new_root"])
+			
+			if action.has("reveal"):
+				var ids_to_reveal = action["reveal"]
+				if typeof(ids_to_reveal) == TYPE_ARRAY:
+					root_game.reveal_entities(ids_to_reveal)
 
-			# Handle scene progression
 			if action.has("trigger"):
 				var trig = action["trigger"]
 				if trig == "trigger_end":
-					emit_signal("trigger_end")
+					root_game.end_game()
 					_end_dialogue()
 					return
 				elif trig == "next_scene":
-					# Mark that we should trigger next scene
-					should_trigger_next_scene = true
+					trigger_next_scene_on_close = true
 					print("🎬 Next scene will be triggered after dialogue closes")
 		
-		# Handle other actions through the target
 		if current_target and current_target.has_method("do_action"):
 			current_target.do_action(action)
 
-	# Record outcome if present
 	if option.has("outcome"):
 		emit_signal("dialogue_finished_with_outcome", option["outcome"])
 
-	# Now change to the next dialogue node
 	current_node = option.get("next", "")
 	
-	# Check if we have a next node to show
 	if current_node != "" and dialogue_tree.has(current_node):
 		_show_node()
 	else:
-		# No next node, end dialogue
 		_end_dialogue()
-		# If this was a next_scene trigger, handle it after dialogue closes
-		if should_trigger_next_scene and root_game:
-			root_game.call_deferred("next_scene")
 		
 func try_close_on_player_distance(player: Node, target: Node, max_distance: float = 64.0):
-	if not visible:
-		return
-	if not is_instance_valid(player) or not is_instance_valid(target):
-		return
+	if not visible: return
+	if not is_instance_valid(player) or not is_instance_valid(target): return
 	if player.global_position.distance_to(target.global_position) > max_distance:
 		_end_dialogue()
 		
 func _end_dialogue():
+	if not dialogue_active: return
+	
 	panel.visible = false
 	visible = false
 	dialogue_active = false
 	if is_instance_valid(portrait_sprite):
 		portrait_sprite.visible = false
+		
+	if is_instance_valid(root_game):
+		if trigger_next_scene_on_close:
+			root_game.call_deferred("next_scene")
+		
 	emit_signal("dialogue_finished")

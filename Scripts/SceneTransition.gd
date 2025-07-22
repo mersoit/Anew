@@ -41,7 +41,7 @@ func request_scene_json(topic: String, theme: String, history: String = ""):
 	add_child(http_request)
 
 	var system_prompt := ""
-	var prompt_file := FileAccess.open("res://scripts/system_prompt.txt", FileAccess.READ)
+	var prompt_file := FileAccess.open("res://Scripts/system_prompt.txt", FileAccess.READ)
 	if prompt_file:
 		system_prompt = prompt_file.get_as_text()
 		prompt_file.close()

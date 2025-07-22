@@ -72,9 +72,6 @@ func _interact_with_target():
 		interaction_target.on_interact()
 	interaction_target = null
 
-func _draw():
-	draw_circle(Vector2.ZERO, 96, Color(0.2, 0.8, 1.0, 0.2))
-
 func _on_body_entered(body):
 	if body not in interactables:
 		interactables.append(body)

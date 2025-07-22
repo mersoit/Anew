@@ -4,25 +4,19 @@ extends Node2D
 @onready var background: Sprite2D = $Background
 @onready var ai_client: Node = $AIClient
 @onready var loading_label: Label = $UI/LoadingLabel
-@onready var player_scene: PackedScene = preload("res://scenes/Player.tscn")
-@onready var npc_scene: PackedScene = preload("res://scenes/NPC.tscn")
-@onready var object_scene: PackedScene = preload("res://scenes/Object.tscn")
-@onready var scene_transition: Node = $SceneTransition
+@onready var player_scene: PackedScene = preload("res://Scenes/Player.tscn")
+@onready var npc_scene: PackedScene = preload("res://Scenes/NPC.tscn")
+@onready var object_scene: PackedScene = preload("res://Scenes/Object.tscn")
 @onready var dialogue_manager: Node = $DialogueManager
 
 var current_scene_index: int = 1
 var topic: String = "High Fantasy"
 var theme: String = "Combat"
-var previous_outcome: String = ""
+var player_history: Array[String] = []
 var scene_json := {}
 var image_paths := {}
-var player_history: Array[String] = []
-var waiting_for_images := false
-var scene_ready_queued := false
 var all_images_finalized := false
 var highlight_slides: Array = []
-var game_ending: bool = false
-var next_scene_delay_timer: Timer = null
 var progression_flags := {}
 var expected_image_ids: Array = []
 var scene_generation_in_progress: bool = false
@@ -33,27 +27,17 @@ func _ready():
 	ai_client.connect("image_ready", _on_image_ready)
 	ai_client.connect("all_images_ready", _on_all_images_ready)
 	ai_client.connect("ending_slides_ready", _on_ending_slides_ready)
-	scene_transition.connect("scene_ready", _on_scene_ready)
-	scene_transition.connect("end_game", _on_end_game)
-	dialogue_manager.connect("dialogue_finished_with_outcome", _on_dialogue_finished)
-	dialogue_manager.connect("trigger_next_scene", _on_trigger_next_scene)
+	dialogue_manager.connect("dialogue_finished_with_outcome", _on_dialogue_finished_with_outcome)
 	_setup_label()
 	$Camera2D.position = Vector2(0, 0)
 	_clear_scene()
-
 	background.centered = true
 	background.position = Vector2(0, 0)
-	background.scale = Vector2(1, 1)
-
 	var screen_size = get_viewport().get_visible_rect().size
 	var bg_size = Vector2(1024, 1024)
 	if screen_size.x > bg_size.x or screen_size.y > bg_size.y:
 		var scale_factor = max(screen_size.x / bg_size.x, screen_size.y / bg_size.y)
 		camera.zoom = Vector2(1 / scale_factor, 1 / scale_factor)
-	next_scene_delay_timer = Timer.new()
-	next_scene_delay_timer.one_shot = true
-	add_child(next_scene_delay_timer)
-	next_scene_delay_timer.timeout.connect(_on_next_scene_delay_timeout)
 	print("✅ Game Ready")
 
 func _setup_label():
@@ -69,34 +53,28 @@ func _setup_label():
 	loading_label.offset_top = 20
 	loading_label.offset_bottom = 100
 
-func _on_scene_ready(scene_index: int):
-	if not all_images_finalized:
-		scene_ready_queued = true
-		print("⏳ Scene build delayed until images are finalized")
-		return
-	current_scene_index = scene_index
-	_clear_scene()
-	generate_scene(current_scene_index)
+func handle_scene_generation_failure(scene_index: int):
+	print("🚨 Scene generation failed after all retries. Resetting and regenerating from scratch...")
+	scene_generation_in_progress = false
+	generate_scene(scene_index)
 
 func generate_scene(scene_id: int):
+	if scene_generation_in_progress and scene_id == current_scene_index:
+		print("⏳ Scene %d generation is already in progress. Ignoring duplicate request." % scene_id)
+		return
 	print("🚀 Generating scene %d with topic '%s' and theme '%s'" % [scene_id, topic, theme])
+	scene_generation_in_progress = true
 	loading_label.text = "Generating scene %d..." % scene_id
-
-	# Fully reset state for this scene
 	image_paths.clear()
 	expected_image_ids.clear()
 	all_images_finalized = false
-	scene_ready_queued = false
-	waiting_for_images = true
 	current_scene_index = scene_id
-
-	ai_client.current_scene_id = "scene%d" % scene_id
 	var history := _build_history_summary()
 	ai_client.request_scene_json(topic, theme, history, scene_id)
 
-func _on_scene_json_received(scene_json: Dictionary) -> void:
+func _on_scene_json_received(received_scene_json: Dictionary) -> void:
 	print("📥 Game received scene JSON")
-	self.scene_json = scene_json
+	self.scene_json = received_scene_json
 	progression_flags = {}
 	if scene_json.has("progression_conditions"):
 		for cond in scene_json["progression_conditions"]:
@@ -107,13 +85,12 @@ func _on_scene_json_received(scene_json: Dictionary) -> void:
 		loading_label.text = "Loading scene..."
 	await get_tree().process_frame
 	print("🎯 Requesting image generation tasks...")
-	ai_client.request_all_images(scene_json, current_scene_index)
 	expected_image_ids = ai_client.get_expected_image_ids(scene_json, current_scene_index)
+	ai_client.request_all_images(scene_json, current_scene_index)
 
 func _on_image_ready(id: String, path: String):
 	image_paths[id] = path
 	print("📸 Image ready:", id, "→", path)
-	# Always re-check if all expected images are present, even for late arrivals
 	if not all_images_finalized and expected_image_ids.size() > 0:
 		var all_ready = true
 		for expected_id in expected_image_ids:
@@ -127,30 +104,19 @@ func _on_all_images_ready():
 	if all_images_finalized:
 		print("⚠️ Scene already finalized, skipping redundant build.")
 		return
-
-	# Check if ALL expected images are present before building
 	var missing_images := []
 	for expected_id in expected_image_ids:
 		if not image_paths.has(expected_id):
 			missing_images.append(expected_id)
-
-	if missing_images.size() > 0:
-		# Print what is missing for debugging
-		for missing_id in missing_images:
-			if missing_id.ends_with("background"):
-				print("⚠️ Background image missing, using fallback color")
-			elif missing_id.ends_with("player"):
-				print("⚠️ Player image missing")
-			else:
-				print("⚠️ Missing image:", missing_id)
+	if not missing_images.is_empty():
 		print("⏳ Waiting for missing images before building scene:", missing_images)
 		return
-
 	print("✅ All images finalized. Building scene now...")
+	all_images_finalized = true
 	_build_scene()
 
 func _build_scene():
-	all_images_finalized = true
+	_clear_scene()
 	if image_paths.has("scene_%d_background" % current_scene_index):
 		var bg_path: String = image_paths["scene_%d_background" % current_scene_index]
 		var img := Image.new()
@@ -159,16 +125,8 @@ func _build_scene():
 			var err := img.load_png_from_buffer(file.get_buffer(file.get_length()))
 			if err == OK:
 				background.texture = ImageTexture.create_from_image(img)
-			else:
-				print("⚠️ Background image decode failed.")
-		else:
-			print("⚠️ Could not read background image file.")
 	else:
-		print("⚠️ Background image not found in image_paths.")
-
-	for child in get_children():
-		if child is CharacterBody2D and child != self:
-			child.queue_free()
+		print("⚠️ Background image not found in image_paths for scene %d" % current_scene_index)
 
 	if scene_json.has("player"):
 		var p = player_scene.instantiate()
@@ -176,77 +134,48 @@ func _build_scene():
 		if image_paths.has("scene_%d_player" % current_scene_index):
 			p.set_sprite(image_paths["scene_%d_player" % current_scene_index])
 		add_child(p)
-		await get_tree().process_frame
 
 	for npc_data in scene_json.get("npcs", []):
-		var positions = npc_data.get("locations", [])
-		if positions.is_empty():
-			positions = [npc_data.get("location", [0, 0])]
-		for pos in positions:
-			var n = npc_scene.instantiate()
-			n.position = _grid_to_pos(pos)
-			n.set_data(npc_data)
-			n.set("dialogue_tree", npc_data.get("dialogue_tree", {}))
-			var npc_id = "scene_%d_npc_%s" % [current_scene_index, npc_data.get("id", "")]
-			if image_paths.has(npc_id):
-				n.set_sprite(image_paths[npc_id])
-			add_child(n)
-			await get_tree().process_frame
+		var n = npc_scene.instantiate()
+		n.position = _grid_to_pos(npc_data.get("location", [0, 0]))
+		n.set_data(npc_data)
+		var npc_id = "scene_%d_npc_%s" % [current_scene_index, npc_data.get("id", "")]
+		if image_paths.has(npc_id):
+			n.set_sprite(image_paths[npc_id])
+		n.visible = npc_data.get("visible_on_start", true)
+		add_child(n)
 
 	for obj_data in scene_json.get("objects", []):
-		var positions = obj_data.get("locations", [])
-		if positions.is_empty():
-			positions = [obj_data.get("position", [0, 0])]
-		for pos in positions:
-			var o = object_scene.instantiate()
-			o.position = _grid_to_pos(pos)
-			o.set_data(obj_data)
-			o.set("dialogue_tree", obj_data.get("dialogue_tree", {}))
-			var obj_id = "scene_%d_obj_%s" % [current_scene_index, obj_data.get("id", "")]
-			if image_paths.has(obj_id):
-				o.set_sprite(image_paths[obj_id])
-			add_child(o)
-			await get_tree().process_frame
+		var o = object_scene.instantiate()
+		o.position = _grid_to_pos(obj_data.get("location", [0, 0]))
+		o.set_data(obj_data)
+		var obj_id = "scene_%d_obj_%s" % [current_scene_index, obj_data.get("id", "")]
+		if image_paths.has(obj_id):
+			o.set_sprite(image_paths[obj_id])
+		o.visible = obj_data.get("visible_on_start", true)
+		add_child(o)
 
 	loading_label.text = ""
-	if scene_ready_queued:
-		next_scene() # Instead of scene_transition.next_scene()
 	scene_generation_in_progress = false 
 
 func next_scene():
 	if scene_generation_in_progress:
 		print("⏳ Scene generation already in progress, skipping duplicate next_scene call.")
 		return
-	scene_generation_in_progress = true
-	current_scene_index += 1  # Increment index here, just before generation
+	current_scene_index += 1
 	_clear_scene()
-	# Reset image paths and related state here for the new scene
-	image_paths.clear()
-	expected_image_ids.clear()
-	all_images_finalized = false
 	generate_scene(current_scene_index)
 
-func _on_dialogue_finished(outcome: String):
+func _on_dialogue_finished_with_outcome(outcome: String):
 	if outcome != "":
 		player_history.append("- " + outcome)
-	previous_outcome = _build_history_summary()
-	next_scene()
-
-func _on_next_scene_delay_timeout():
-	next_scene()
-
-func _on_trigger_next_scene():
-	next_scene_delay_timer.start(5.0)
 
 func _build_history_summary() -> String:
-	var summary := ""
-	for entry in player_history:
-		summary += entry + "\n"
-	return summary
+	return "\n".join(player_history)
 
 func _grid_to_pos(grid: Array) -> Vector2:
-	var tile_w = 64
-	var tile_h = 64
+	var tile_w = 40
+	var tile_h = 40
 	return Vector2(grid[0] * tile_w, grid[1] * tile_h)
 
 func set_topic_and_theme(t: String, th: String) -> void:
@@ -255,7 +184,6 @@ func set_topic_and_theme(t: String, th: String) -> void:
 	current_scene_index = 1
 	player_history.clear()
 	highlight_slides.clear()
-	game_ending = false
 	generate_scene(current_scene_index)
 
 func record_event(event: String) -> void:
@@ -269,8 +197,7 @@ func _on_interact(target_node):
 		else:
 			print("🧱 No dialogue for this entity.")
 
-func _on_end_game():
-	game_ending = true
+func end_game():
 	loading_label.text = "Gathering your story highlights..."
 	ai_client.get_ending_slides()
 
@@ -294,46 +221,49 @@ func _show_ending_slides():
 
 func switch_dialogue_node(target_id: String, new_root: String):
 	print("🎯 Attempting to switch dialogue for %s to root: %s" % [target_id, new_root])
-	
-	# Search through all children to find the target
 	for child in get_children():
-		if not is_instance_valid(child):
-			continue
-			
-		# Check if this child has an ID that matches
+		if not is_instance_valid(child): continue
 		var child_id = ""
 		if child.has_method("get") and child.get("id") != null:
 			child_id = child.get("id")
-		
-		# Check both exact match and partial match (in case of suffixes)
 		if child_id == target_id or child_id.begins_with(target_id + "_"):
 			print("✅ Found matching entity: %s (id: %s)" % [child.name, child_id])
-			
-			# Found the target, update its dialogue tree
 			if child.has_method("get_dialogue_tree"):
 				var tree = child.get_dialogue_tree()
 				if tree != null and typeof(tree) == TYPE_DICTIONARY:
 					if tree.has(new_root):
-						# Create a new tree structure with the new root as "root"
 						var new_tree = tree.duplicate(true)
 						new_tree["root"] = new_tree[new_root]
-						
-						# Update the child's dialogue tree
 						if child.has_method("set"):
 							child.set("dialogue_tree", new_tree)
 							print("✅ Successfully switched %s dialogue to start at: %s" % [target_id, new_root])
 					else:
 						print("⚠️ No such root node: %s in %s's dialogue tree" % [new_root, target_id])
-						print("  Available nodes: ", tree.keys())
 				else:
 					print("⚠️ Invalid dialogue tree for %s" % target_id)
 			return
-	
 	print("⚠️ Could not find target with id: %s" % target_id)
-	print("  Available IDs:")
-	for child in get_children():
-		if child.has_method("get") and child.get("id") != null:
-			print("    - %s" % child.get("id"))
+
+# --- THIS IS THE MISSING FUNCTION ---
+func reveal_entities(ids_to_reveal: Array):
+	print("✨ Revealing entities:", ids_to_reveal)
+	for entity_id in ids_to_reveal:
+		var found_node = null
+		for child in get_children():
+			if child.has_method("get") and child.get("id") != null:
+				var child_id = child.get("id")
+				if child_id == entity_id or child_id.begins_with(entity_id + "_"):
+					found_node = child
+					break
+		
+		if found_node:
+			if not found_node.visible:
+				print("  -> Found and revealing:", found_node.name, "(id:", found_node.get("id"), ")")
+				found_node.visible = true
+			else:
+				print("  -> Entity", found_node.name, "is already visible.")
+		else:
+			print("  -> ⚠️ Could not find entity with id:", entity_id, "to reveal.")
 
 func _clear_scene():
 	for child in get_children():

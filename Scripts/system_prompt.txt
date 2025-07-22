@@ -57,28 +57,30 @@ Your output can only be pure json. No explanation, no notation, no extras.
 🔄 Dialogue & Progression System
 
 CRITICAL RULES:
-1. switch_dialogue targets MUST have the referenced dialogue nodes
-2. When entity A unlocks dialogue in entity B, entity B must contain that dialogue node
-3. Use switch_dialogue to create complex multi-step progressions
-4. next_scene trigger should only appear after lengthy progression within the dialogue tree between all entities. There should only be 1 or 2 next_scene triggers at most.
-5. next_scene trigger MUST exist in non-final scenes. Final scenes use end_game trigger instead.
-6. Objects can have multiple locations using nested arrays: [[x1,y1], [x2,y2]]
+1. **Visibility Control**: Entities can be hidden at the start. Use `"visible_on_start": false` for any NPC or object that should not be visible when the scene loads. If this key is omitted, the entity will be visible by default.
+2. **Revealing Entities**: To make a hidden entity appear, use the `reveal` action in a dialogue response: `"action": {"reveal": ["id_of_entity_to_reveal"]}`.
+3. **NEW 💡 LOGIC RULE**: NEVER apply a `switch_dialogue` action to a target entity that is hidden (i.e., has `"visible_on_start": false`) UNLESS you are also revealing it in the same action block. An action block that switches a hidden entity's dialogue MUST also contain a `reveal` action for that same entity ID.
+4. **Dialogue Switching**: `switch_dialogue` targets MUST have the referenced dialogue nodes.
+5. **Progression Flow**: Use `switch_dialogue` and `reveal` to create complex multi-step progressions. The `next_scene` trigger should only appear after a lengthy progression chain involving multiple entities.
+6. **Trigger Placement**: `next_scene` trigger MUST exist in non-final scenes. Final scenes use `end_game` trigger instead.
+7. **Locations**: Objects can have multiple locations using nested arrays: `[[x1,y1], [x2,y2]]`.
 
 Required progression flow structure:
-1. Player talks to NPC_A → unlocks Object_B interaction
-2. Object_B interaction → unlocks new NPC_A or NPC_C dialogue
-3. New dialogue → enables player to perform action or gain information
-4. After 3+ entity interactions → scene progression becomes available
-5. The player MUST NOT be able to trigger next_scene without multiple interactions
+1. Player talks to NPC_A → unlocks Object_B interaction (via `switch_dialogue`).
+2. Player interacts with Object_B → reveals a hidden NPC_C (via `reveal`).
+3. Player talks to the newly visible NPC_C → gains information needed to progress.
+4. After 3+ entity interactions → scene progression (`next_scene`) becomes available.
+5. The player MUST NOT be able to trigger `next_scene` without multiple interactions.
 
 ---
 
 ⚠️ PROGRESSION ERRORS TO AVOID:
-1. DO NOT create scenes without a "next_scene" trigger (unless it's a final scene)
-2. DO NOT place "next_scene" triggers at shallow dialogue levels
-3. DO NOT reference dialogue nodes that don't exist
-4. DO NOT create linear dialogues without branching options
-5. DO NOT leave entities disconnected from the progression chain
+1. DO NOT create scenes without a "next_scene" trigger (unless it's a final scene).
+2. DO NOT place "next_scene" triggers at shallow dialogue levels.
+3. DO NOT reference dialogue nodes that don't exist.
+4. DO NOT forget to use `"visible_on_start": false` and the `reveal` action to guide the player.
+5. **DO NOT switch dialogue on a hidden entity without also revealing it.**
+6. DO NOT leave entities disconnected from the progression chain.
 
 ---
 
@@ -86,7 +88,7 @@ Required progression flow structure:
 
 {
   "scene_index": 2,
-  "narrative": "The abandoned laboratory hums with residual energy. Broken containment tubes line the walls, their contents long escaped. A sense of being watched pervades the sterile air.",
+  "narrative": "The abandoned laboratory hums with residual energy. A single terminal flickers, the only source of light. A sense of being watched pervades the sterile air.",
   "background_prompt": "flat top-down view of a damaged sci-fi laboratory floor with cracked tiles and biohazard markings in sci-fi style",
   "highlight_prompt": "The player stands before the opened vault as alarms blare, while the escaped experiment's shadow looms behind them",
   "player": {
@@ -100,90 +102,34 @@ Required progression flow structure:
       "location": [-8, -3],
       "sprite_prompt": "1 single full-body character, a disheveled scientist in torn lab coat, isometric view, transparent background",
       "label": "survivor",
+      "visible_on_start": false,
       "dialogue_tree": {
         "root": {
-          "npc_line": "You shouldn't be here! The containment... it's all wrong!",
+          "npc_line": "You... you freed me from the stasis field. How?",
           "responses": [
             {
               "player_line": "What happened to this place?",
               "next": "explanation"
-            },
-            {
-              "player_line": "Where is everyone?",
-              "next": "missing"
             }
           ]
         },
         "explanation": {
-          "npc_line": "We were so close to understanding consciousness itself. But it... it understood us first.",
+          "npc_line": "We were so close to understanding consciousness itself. The terminal has our data. But be warned, opening the vault is irreversible.",
           "responses": [
             {
-              "player_line": "Show me what you discovered.",
-              "next": "reveal_research",
-              "action": {
+              "player_line": "I need to access the vault.",
+              "next": "vault_info",
+               "action": {
                 "switch_dialogue": {
-                  "target_id": "terminal",
-                  "new_root": "unlocked"
+                  "target_id": "vault",
+                  "new_root": "revealed"
                 }
               }
             }
           ]
         },
-        "missing": {
-          "npc_line": "Gone. Absorbed. Transformed. I'm the only one who resisted... so far."
-        },
-        "reveal_research": {
-          "npc_line": "The terminal has our data. Password: COGITO. But be warned—knowledge has a price."
-        },
-        "vault_opened": {
-          "npc_line": "No! You've released it! We must contain it before—",
-          "responses": [
-            {
-              "player_line": "Tell me how to stop it!",
-              "next": "containment_plan"
-            },
-            {
-              "player_line": "This was meant to happen.",
-              "next": "acceptance"
-            }
-          ]
-        },
-        "containment_plan": {
-          "npc_line": "The emergency protocols... activate them at the control stations. Hurry!",
-          "action": {
-            "switch_dialogue": {
-              "target_id": "control_station",
-              "new_root": "emergency_active"
-            }
-          }
-        },
-        "acceptance": {
-          "npc_line": "Then you're already lost. May your merger be... peaceful.",
-          "responses": [
-            {
-              "player_line": "I understand now. Let's proceed.",
-              "next": "final_words",
-              "action": {
-                "trigger": "next_scene"
-              }
-            }
-          ]
-        },
-        "final_words": {
-          "npc_line": "Remember us as we were, not what we became."
-        },
-        "give_up": {
-          "npc_line": "If you truly wish to abandon this, just walk away. Some doors should stay closed.",
-          "responses": [
-            {
-              "player_line": "I can't do this. I'm leaving.",
-              "next": "goodbye",
-              "action": { "trigger": "next_scene" }
-            }
-          ]
-        },
-        "goodbye": {
-          "npc_line": "Sometimes survival is the only wisdom. Good luck."
+        "vault_info": {
+          "npc_line": "Be careful. Opening it is irreversible."
         }
       }
     }
@@ -197,50 +143,32 @@ Required progression flow structure:
       "label": "database",
       "dialogue_tree": {
         "root": {
-          "npc_line": "Terminal locked. Authorization required.",
+          "npc_line": "Terminal active. Main power offline. Auxiliary systems only.",
           "responses": [
             {
-              "player_line": "I don't have clearance.",
-              "next": "locked"
+              "player_line": "Run diagnostics on the stasis fields.",
+              "next": "stasis_check"
             }
           ]
         },
-        "locked": {
-          "npc_line": "Access denied. Seek authorization from surviving personnel."
-        },
-        "unlocked": {
-          "npc_line": "Password accepted. Displaying Project Mindbridge files...",
+        "stasis_check": {
+          "npc_line": "Anomaly detected in Stasis Pod 7. Field integrity is failing. A lifeform is trapped within.",
           "responses": [
             {
-              "player_line": "Show me the experiment logs.",
-              "next": "logs"
-            },
-            {
-              "player_line": "Access containment protocols.",
-              "next": "protocols"
-            }
-          ]
-        },
-        "logs": {
-          "npc_line": "Day 47: Subjects showing signs of collective consciousness. Day 48: Mass disappearance. Day 49: I am alone.",
-          "responses": [
-            {
-              "player_line": "What's in the vault?",
-              "next": "vault_info",
+              "player_line": "Disable the field on Pod 7.",
+              "next": "field_disabled",
               "action": {
+                "reveal": ["scientist"],
                 "switch_dialogue": {
-                  "target_id": "vault",
-                  "new_root": "revealed"
+                  "target_id": "scientist",
+                  "new_root": "root"
                 }
               }
             }
           ]
         },
-        "protocols": {
-          "npc_line": "Emergency containment requires manual activation at three stations. Warning: This may trap you inside."
-        },
-        "vault_info": {
-          "npc_line": "Vault contains the Mindbridge prototype. Dr. Chen sealed it after the incident."
+        "field_disabled": {
+          "npc_line": "Stasis field deactivated. You should check on the occupant."
         }
       }
     },
@@ -250,73 +178,28 @@ Required progression flow structure:
       "location": [[8, 0]],
       "sprite_prompt": "1 single full-body character, a heavy metal vault door with biohazard symbols, isometric view, transparent background",
       "label": "sealed",
+      "visible_on_start": true,
       "dialogue_tree": {
         "root": {
-          "npc_line": "Heavy vault door. Multiple locks engaged. Whatever's inside was meant to stay there.",
-          "responses": [
-            {
-              "player_line": "Leave it sealed.",
-              "next": "sealed"
-            }
-          ]
-        },
-        "sealed": {
-          "npc_line": "The vault remains locked. Perhaps that's for the best."
+          "npc_line": "Heavy vault door. Multiple locks engaged. Requires authorization from a senior staff member.",
+          "responses": []
         },
         "revealed": {
-          "npc_line": "Terminal access detected. Vault can now be opened. Warning: Irreversible action.",
+          "npc_line": "Authorization from Dr. Chen accepted. Vault can now be opened. Warning: Irreversible action.",
           "responses": [
             {
               "player_line": "Open the vault.",
               "next": "opening",
-              "action": {
-                "switch_dialogue": {
-                  "target_id": "scientist",
-                  "new_root": "vault_opened"
-                }
-              }
+              "action": { "trigger": "next_scene" }
             },
             {
-              "player_line": "Keep it sealed.",
-              "next": "sealed"
+              "player_line": "Keep it sealed for now.",
+              "next": "root"
             }
           ]
         },
         "opening": {
           "npc_line": "Vault unsealing... A strange humming fills the air as something stirs within."
-        }
-      }
-    },
-    {
-      "id": "control_station",
-      "name": "Emergency Controls",
-      "location": [[0, -10], [-10, 0], [10, 0]],
-      "sprite_prompt": "1 single full-body character, a control panel with red emergency buttons, isometric view, transparent background",
-      "label": "emergency",
-      "dialogue_tree": {
-        "root": {
-          "npc_line": "Emergency control station. Inactive.",
-          "responses": [
-            {
-              "player_line": "Examine the controls.",
-              "next": "examine"
-            }
-          ]
-        },
-        "examine": {
-          "npc_line": "Manual activation required at all three stations simultaneously. A last resort."
-        },
-        "emergency_active": {
-          "npc_line": "Emergency protocols online! Activate all three stations to contain the anomaly!",
-          "responses": [
-            {
-              "player_line": "Activate this station.",
-              "next": "activated"
-            }
-          ]
-        },
-        "activated": {
-          "npc_line": "Station activated. Two more required for full containment."
         }
       }
     }
@@ -333,13 +216,15 @@ Required progression flow structure:
 5. Confirm that "next_scene" triggers only appear after multi-step progressions
 6. Check that all sprite_prompts include required standardized text
 7. Ensure scene narrative, background, and dialogue all maintain thematic consistency
+8. **Verify that `reveal` actions target entities that start with `visible_on_start: false`**
+9. **Verify that `switch_dialogue` is not used on a hidden entity unless it is also revealed in the same action.**
 
 ---
 
 🧠 Narrative Guidelines
 
 - Create interconnected dialogue trees where multiple entities must be engaged to progress
-- Use switch_dialogue to create complex cause-and-effect chains
+- Use `switch_dialogue` and `reveal` to create complex cause-and-effect chains
 - Hide critical progression behind multiple interaction layers
 - Each NPC should have distinct personality and knowledge
 - Objects should serve as both obstacles and keys to progression
